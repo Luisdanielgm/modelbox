@@ -302,6 +302,7 @@ Dokploy construye la imagen en el propio servidor desde el repositorio Git
    `MODELBOX_DATA_DIR`, pero este default evita confusiones con otros servicios.
    Modelbox organiza internamente:
    - `/modelbox-data/hf` -> cache de Hugging Face (Pocket-TTS, Qwen y Whisper).
+   - `/modelbox-data/cache` -> cache generica de librerias.
    - `/modelbox-data/state` -> estado (modelos descargados / habilitados para la API).
    - `/modelbox-data/supertonic` -> pesos de Supertonic-3.
    - `/modelbox-data/outputs` -> audios generados.

@@ -50,6 +50,8 @@ COPY . .
 # MODELBOX_MODELS: el set elegido en build; la app oculta los modelos que no
 # estan incluidos en esta imagen (sus librerias no se instalaron).
 ENV MODELBOX_DATA_DIR=/modelbox-data \
+    HF_HOME=/modelbox-data/hf \
+    XDG_CACHE_HOME=/modelbox-data/cache \
     MODELBOX_MODELS=$MODELS
 
 EXPOSE 7860

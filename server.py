@@ -36,6 +36,19 @@ PANEL_PASSWORD = os.environ.get("PANEL_PASSWORD")
 MAX_UPLOAD_MB = int(os.environ.get("MODELBOX_MAX_UPLOAD_MB", "25"))
 
 
+def _dir_size_mb(path: str | None) -> float:
+    total = 0
+    if not path or not os.path.exists(path):
+        return 0.0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return round(total / 1e6, 2)
+
+
 def _require_token(authorization: str | None = Header(default=None)) -> None:
     if not API_TOKEN:
         raise HTTPException(status_code=503, detail="API deshabilitada (configurar API_TOKEN).")
@@ -81,6 +94,15 @@ def health():
                 "supertonic_dir": SUPERTONIC_DIR,
                 "pocket_weights": POCKET_WEIGHTS,
                 "hf_home": os.environ.get("HF_HOME"),
+                "xdg_cache_home": os.environ.get("XDG_CACHE_HOME"),
+                "sizes_mb": {
+                    "modelbox_data": _dir_size_mb(DATA_DIR),
+                    "hf_home": _dir_size_mb(os.environ.get("HF_HOME")),
+                    "xdg_cache_home": _dir_size_mb(os.environ.get("XDG_CACHE_HOME")),
+                    "state": _dir_size_mb(STATE_DIR),
+                    "supertonic": _dir_size_mb(SUPERTONIC_DIR),
+                    "outputs": _dir_size_mb(OUTPUTS),
+                },
                 "state": state.diagnostics(),
             },
             "models": [_model_info(n, b) for n, b in BACKENDS.items()],

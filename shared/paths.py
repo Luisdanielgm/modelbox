@@ -26,20 +26,23 @@ if DATA_DIR:
     OUTPUTS = _join(DATA_DIR, "outputs")
     SUPERTONIC_DIR = _join(DATA_DIR, "supertonic")
     POCKET_WEIGHTS = _join(DATA_DIR, "pocket-weights", "model.safetensors")
-    # HF cache for Pocket/Qwen/Whisper. This must be set before importing
-    # huggingface_hub/transformers/faster-whisper. If an old deployment still
-    # has the previous /data/hf default, follow MODELBOX_DATA_DIR automatically;
-    # explicit non-default HF_HOME still wins.
-    _legacy_hf = "/data/hf"
+    # Cache dirs must be stable and visible in Dokploy terminal. If the image
+    # default points at /data or /modelbox-data but the operator changed
+    # MODELBOX_DATA_DIR, follow the custom data dir automatically. Explicit
+    # non-default overrides still win.
+    _default_homes = {"/data/hf", "/modelbox-data/hf"}
     _desired_hf = _join(DATA_DIR, "hf")
-    if not os.environ.get("HF_HOME") or os.environ.get("HF_HOME") == _legacy_hf:
+    if not os.environ.get("HF_HOME") or os.environ.get("HF_HOME") in _default_homes:
         os.environ["HF_HOME"] = _desired_hf
+    _desired_xdg = _join(DATA_DIR, "cache")
+    if not os.environ.get("XDG_CACHE_HOME") or os.environ.get("XDG_CACHE_HOME") in {"/data/cache", "/modelbox-data/cache"}:
+        os.environ["XDG_CACHE_HOME"] = _desired_xdg
 else:
     STATE_DIR = os.environ.get("MODELBOX_STATE_DIR") or os.path.join(ROOT, ".state")
     OUTPUTS = os.path.join(ROOT, "outputs")
     SUPERTONIC_DIR = os.path.join(ROOT, "models", "supertonic", "assets")
     POCKET_WEIGHTS = os.path.join(ROOT, "models", "pockettts", "weights", "model.safetensors")
 
-for path in (STATE_DIR, OUTPUTS, SUPERTONIC_DIR, os.path.dirname(POCKET_WEIGHTS), os.environ.get("HF_HOME")):
+for path in (STATE_DIR, OUTPUTS, SUPERTONIC_DIR, os.path.dirname(POCKET_WEIGHTS), os.environ.get("HF_HOME"), os.environ.get("XDG_CACHE_HOME")):
     if path:
         os.makedirs(path, exist_ok=True)

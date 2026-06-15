@@ -12,8 +12,10 @@ services:
       - "7860:7860"
     environment:
       # Un solo volumen persistente: /modelbox-data/hf, /modelbox-data/state, /modelbox-data/supertonic,
-      # /modelbox-data/outputs y /modelbox-data/pocket-weights viven adentro.
+      # /modelbox-data/outputs, /modelbox-data/cache y /modelbox-data/pocket-weights viven adentro.
       MODELBOX_DATA_DIR: /modelbox-data
+      HF_HOME: /modelbox-data/hf
+      XDG_CACHE_HOME: /modelbox-data/cache
       # Inferencias en paralelo (en CPU, 1 ya usa todos los cores; el resto va a cola).
       MODELBOX_MAX_CONCURRENT: ${MODELBOX_MAX_CONCURRENT:-1}
       # Tamano de Whisper (small/medium/large-v3). small int8 ~= 1 GB RAM.
@@ -30,6 +32,7 @@ services:
       # /modelbox-data/state            modelos descargados / habilitados para la API
       # /modelbox-data/supertonic       pesos de Supertonic-3
       # /modelbox-data/outputs          audios generados
+      # /modelbox-data/cache            cache gen?rica de librer?as
       # /modelbox-data/pocket-weights   model.safetensors gated de Pocket-TTS (opcional)
       - modelbox-data:/modelbox-data
     restart: unless-stopped

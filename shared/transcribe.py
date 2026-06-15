@@ -12,6 +12,19 @@ from shared import state
 WHISPER_SIZE = os.environ.get("MODELBOX_WHISPER_SIZE", "small")
 
 
+def _dir_size_mb(path: str) -> float:
+    total = 0
+    if not path or not os.path.exists(path):
+        return 0.0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total / 1e6
+
+
 class WhisperTranscriber:
     name = "Whisper"
     key = "whisper"
@@ -21,14 +34,23 @@ class WhisperTranscriber:
         self._model = None
 
     def is_downloaded(self) -> bool:
-        return state.is_downloaded(self.name)
+        if not state.is_downloaded(self.name):
+            return False
+        # A marker without real HF cache is stale (e.g. old deployment marked it
+        # after a failed/wrong-path download). small int8 is hundreds of MB; 10 MB
+        # is a conservative floor to detect empty caches without hard-coding model files.
+        return _dir_size_mb(os.environ.get("HF_HOME")) > 10
 
     def download(self):
         """Descarga el modelo a la caché de HF y lo marca disponible."""
         import logging
         logging.getLogger(__name__).info("Descargando modelo: %s (%s)…", self.name, WHISPER_SIZE)
         from faster_whisper import WhisperModel
-        WhisperModel(WHISPER_SIZE, device="cpu", compute_type="int8")
+        download_root = os.environ.get("HF_HOME")
+        WhisperModel(WHISPER_SIZE, device="cpu", compute_type="int8", download_root=download_root)
+        if _dir_size_mb(download_root) <= 10:
+            state.unmark_downloaded(self.name)
+            raise RuntimeError(f"Whisper no dejo archivos de modelo en HF_HOME={download_root!r}.")
         state.mark_downloaded(self.name)
 
     def _ensure_loaded(self):
@@ -39,7 +61,9 @@ class WhisperTranscriber:
             # local_files_only: si el marker existe pero la caché se perdió,
             # falla claro en vez de re-descargar en silencio.
             self._model = WhisperModel(WHISPER_SIZE, device="cpu",
-                                       compute_type="int8", local_files_only=True)
+                                       compute_type="int8",
+                                       download_root=os.environ.get("HF_HOME"),
+                                       local_files_only=True)
 
     def transcribe(self, audio_path, language=None) -> dict:
         """Devuelve {'text', 'language'}. `language` opcional (autodetecta si None)."""

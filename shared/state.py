@@ -35,6 +35,13 @@ def mark_downloaded(name: str) -> None:
         f.write("ok")
 
 
+def unmark_downloaded(name: str) -> None:
+    try:
+        os.remove(_marker(name))
+    except FileNotFoundError:
+        pass
+
+
 def _load_enabled() -> dict:
     try:
         with open(_ENABLED_FILE, encoding="utf-8") as f:
@@ -84,6 +91,19 @@ def cleanup_outputs(keep: int = _KEEP_OUTPUTS) -> None:
             pass
 
 
+def _dir_size_mb(path: str) -> float:
+    total = 0
+    if not path or not os.path.exists(path):
+        return 0.0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return round(total / 1e6, 2)
+
+
 def diagnostics() -> dict:
     """Small read-only snapshot to verify persisted state/markers in production."""
     try:
@@ -95,4 +115,6 @@ def diagnostics() -> dict:
         "enabled_file": _ENABLED_FILE,
         "enabled": _load_enabled(),
         "download_markers": markers,
+        "state_dir_mb": _dir_size_mb(STATE_DIR),
+        "outputs_mb": _dir_size_mb(OUTPUTS),
     }
