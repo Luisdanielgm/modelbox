@@ -231,6 +231,27 @@ class PocketBackend(Backend):
 
     _device = "cpu"
 
+    def _download_clone_weights_if_token(self) -> bool:
+        """Download optional gated Pocket clone weights when HF_TOKEN is configured."""
+        if os.path.exists(self._CLONE_WEIGHTS):
+            return True
+        token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        if not token:
+            return False
+        logger.info("Descargando pesos gated de clonacion de %s...", self.name)
+        from huggingface_hub import hf_hub_download
+        src = hf_hub_download(
+            repo_id="kyutai/pocket-tts",
+            filename="languages/spanish/model.safetensors",
+            token=token,
+        )
+        os.makedirs(os.path.dirname(self._CLONE_WEIGHTS), exist_ok=True)
+        import shutil
+        tmp = f"{self._CLONE_WEIGHTS}.tmp"
+        shutil.copyfile(src, tmp)
+        os.replace(tmp, self._CLONE_WEIGHTS)
+        return True
+
     def download(self):
         logger.info("Descargando modelo: %s…", self.name)
         from pocket_tts import TTSModel

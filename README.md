@@ -147,6 +147,7 @@ ejecutar el panel sin configurar nada:
 | *(ninguna)* | Panel abierto, API apagada. |
 | `PANEL_USER` + `PANEL_PASSWORD` | El panel pide login (usuario/clave). |
 | `API_TOKEN` | Habilita la API y la protege con `Authorization: Bearer <token>`. |
+| `HF_TOKEN` | Opcional: permite descargar pesos gated de Pocket-TTS para clonacion. |
 
 Variables operativas (opcionales, con default):
 
