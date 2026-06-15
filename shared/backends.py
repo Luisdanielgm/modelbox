@@ -12,6 +12,17 @@ OUTPUTS = os.path.join(ROOT, "outputs")
 os.makedirs(OUTPUTS, exist_ok=True)
 
 
+def _peak_normalize(x, target=0.95):
+    """Normaliza el pico de amplitud a un nivel parejo (evita que unas voces
+    salgan más bajas que otras). Acepta numpy array o torch tensor."""
+    import numpy as np
+    arr = x.detach().cpu().numpy() if hasattr(x, "detach") else np.asarray(x)
+    peak = float(np.max(np.abs(arr))) if arr.size else 0.0
+    if peak > 1e-6:
+        arr = arr * (target / peak)
+    return arr
+
+
 class Backend:
     name = "base"
     capabilities = {
@@ -63,7 +74,7 @@ class SupertonicBackend(Backend):
             total_steps=int(steps), speed=float(speed),
         )
         out = os.path.join(OUTPUTS, f"supertonic_{int(time.time())}.wav")
-        self._model.save_audio(wav, out)
+        self._model.save_audio(_peak_normalize(wav), out)
         return out
 
 
@@ -135,7 +146,7 @@ class QwenBackend(Backend):
                     pass
 
         out = os.path.join(OUTPUTS, f"qwen3_{int(time.time())}.wav")
-        sf.write(out, wavs[0], sr)
+        sf.write(out, _peak_normalize(wavs[0]), sr)
         return out
 
 
@@ -175,6 +186,13 @@ class PocketBackend(Backend):
             from pocket_tts import TTSModel
             if self._has_clone:
                 self._model = TTSModel.load_model(config=self._resolved_config())
+                # Cargar desde un config propio hace que el modelo pierda la
+                # asociación de idioma que las voces preset necesitan. Apuntamos
+                # `origin` al config de idioma del paquete: así los presets
+                # resuelven sus embeddings y la clonación (pesos locales ya
+                # cargados) sigue funcionando, todo en un solo modelo.
+                from pocket_tts.utils.config import CONFIGS_DIR
+                self._model.origin = CONFIGS_DIR / "spanish.yaml"
             else:
                 self._model = TTSModel.load_model()
 
@@ -185,7 +203,7 @@ class PocketBackend(Backend):
         state = self._model.get_state_for_audio_prompt(conditioning)
         audio = self._model.generate_audio(state, text, max_tokens=int(max_tokens))
         out = os.path.join(OUTPUTS, f"pocket_{int(time.time())}.wav")
-        sf.write(out, audio.numpy(), self._model.sample_rate)
+        sf.write(out, _peak_normalize(audio), self._model.sample_rate)
         return out
 
 
