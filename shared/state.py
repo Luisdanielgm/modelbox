@@ -82,3 +82,17 @@ def cleanup_outputs(keep: int = _KEEP_OUTPUTS) -> None:
             os.remove(p)
         except OSError:
             pass
+
+
+def diagnostics() -> dict:
+    """Small read-only snapshot to verify persisted state/markers in production."""
+    try:
+        markers = sorted(f for f in os.listdir(STATE_DIR) if f.endswith(".downloaded"))
+    except OSError:
+        markers = []
+    return {
+        "state_dir": STATE_DIR,
+        "enabled_file": _ENABLED_FILE,
+        "enabled": _load_enabled(),
+        "download_markers": markers,
+    }

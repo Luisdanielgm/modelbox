@@ -319,7 +319,7 @@ with gr.Blocks(title="Modelbox") as demo:
                         audio_out = gr.Audio(label="Resultado", streaming=True, autoplay=True)
 
                 if WHISPER:
-                    with gr.Tab("Transcribir (STT)"):
+                    with gr.Tab("Transcribir (STT)") as tr_tab:
                         tr_status = gr.Markdown(_tr_status_md())
                         with gr.Row():
                             tr_download_btn = gr.Button("Descargar Whisper",
@@ -360,8 +360,9 @@ with gr.Blocks(title="Modelbox") as demo:
                       outputs=[audio_out, status])
 
     if WHISPER:
-        demo.load(on_whisper_load,
-                  outputs=[tr_status, tr_download_btn, tr_enable_cb, tr_btn])
+        whisper_state_outputs = [tr_status, tr_download_btn, tr_enable_cb, tr_btn]
+        demo.load(on_whisper_load, outputs=whisper_state_outputs)
+        tr_tab.select(on_whisper_load, outputs=whisper_state_outputs)
         tr_download_btn.click(do_download_whisper,
                               outputs=[tr_status, tr_download_btn, tr_btn, tr_msg])
         tr_enable_cb.change(set_enable_whisper, inputs=tr_enable_cb, outputs=tr_status)

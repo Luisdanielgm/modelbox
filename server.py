@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from app import demo
 from shared import inference, state
 from shared.backends import BACKENDS
+from shared.paths import DATA_DIR, OUTPUTS, POCKET_WEIGHTS, STATE_DIR, SUPERTONIC_DIR
 from shared.transcribe import TRANSCRIBERS
 
 API_TOKEN = os.environ.get("API_TOKEN")
@@ -73,6 +74,15 @@ def _model_info(name, backend) -> dict:
 def health():
     return {"status": "ok",
             "queue": inference.status(),
+            "storage": {
+                "modelbox_data_dir": DATA_DIR,
+                "state_dir": STATE_DIR,
+                "outputs_dir": OUTPUTS,
+                "supertonic_dir": SUPERTONIC_DIR,
+                "pocket_weights": POCKET_WEIGHTS,
+                "hf_home": os.environ.get("HF_HOME"),
+                "state": state.diagnostics(),
+            },
             "models": [_model_info(n, b) for n, b in BACKENDS.items()],
             "transcribers": [_model_info(n, t) for n, t in TRANSCRIBERS.items()]}
 
