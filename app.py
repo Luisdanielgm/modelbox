@@ -83,7 +83,8 @@ def on_model_change(model_name):
         _status_md(model_name),
         gr.update(visible=not dl),          # download_btn
         gr.update(value=state.is_enabled(model_name)),  # enable_cb
-        gr.update(interactive=dl),          # gen_btn: solo si est? descargado
+        gr.update(interactive=dl),          # gen_btn: solo si esta descargado
+        gr.update(visible=_pocket_clone_download_visible(model_name)),
         None,                               # audio_out: clear previous model result
         "",                                 # status: clear previous model message
     )
@@ -96,6 +97,23 @@ def do_download(model_name):
     except Exception as e:
         return _status_md(model_name), gr.update(), gr.update(), f"Error al descargar: {_friendly_error(e)}"
     return _status_md(model_name), gr.update(visible=False), gr.update(interactive=True), msg
+
+
+def _pocket_clone_download_visible(model_name):
+    backend = BACKENDS[model_name]
+    return getattr(backend, "key", None) == "pocket" and not backend.capabilities.get("clone")
+
+
+def do_download_pocket_clone(model_name):
+    backend = BACKENDS[model_name]
+    if getattr(backend, "key", None) != "pocket":
+        return _status_md(model_name), gr.update(), ""
+    try:
+        backend.download_clone_weights()
+        msg = "Listo: clonacion de Pocket disponible."
+    except Exception as e:
+        return _status_md(model_name), gr.update(visible=True), f"Error al descargar clonacion: {_friendly_error(e)}"
+    return _status_md(model_name), gr.update(visible=False), msg
 
 
 def set_enable(model_name, value):
@@ -305,6 +323,10 @@ with gr.Blocks(title="Modelbox") as demo:
                                 label="Habilitar en la API",
                                 info="Permite consumir este modelo por /api/tts (requiere API_TOKEN en el servidor).",
                                 value=state.is_enabled(DEFAULT_MODEL))
+                        pocket_clone_btn = gr.Button(
+                            "Descargar clonacion Pocket",
+                            visible=_pocket_clone_download_visible(DEFAULT_MODEL),
+                        )
                         text_in = gr.Textbox(label="Texto", lines=3,
                                              placeholder="Texto a sintetizar...")
 
@@ -363,11 +385,13 @@ with gr.Blocks(title="Modelbox") as demo:
 
     if MODEL_NAMES:
         tts_state_outputs = [voice_dd, lang_dd, speed_sl, steps_sl, ref_audio_in, ref_text_in,
-                             model_status, download_btn, enable_cb, gen_btn, audio_out, status]
+                             model_status, download_btn, enable_cb, gen_btn, pocket_clone_btn, audio_out, status]
         demo.load(on_model_change, inputs=model_dd, outputs=tts_state_outputs)
         model_dd.change(on_model_change, inputs=model_dd, outputs=tts_state_outputs)
         download_btn.click(do_download, inputs=model_dd,
                            outputs=[model_status, download_btn, gen_btn, status])
+        pocket_clone_btn.click(do_download_pocket_clone, inputs=model_dd,
+                               outputs=[model_status, pocket_clone_btn, status])
         enable_cb.change(set_enable, inputs=[model_dd, enable_cb], outputs=model_status)
         gen_btn.click(generate,
                       inputs=[model_dd, text_in, voice_dd, lang_dd, speed_sl, steps_sl,

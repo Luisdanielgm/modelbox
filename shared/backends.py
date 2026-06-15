@@ -252,6 +252,15 @@ class PocketBackend(Backend):
         os.replace(tmp, self._CLONE_WEIGHTS)
         return True
 
+    def download_clone_weights(self) -> None:
+        if self._download_clone_weights_if_token():
+            from pocket_tts import TTSModel
+            TTSModel.load_model(config=self._resolved_config())
+            return
+        raise RuntimeError(
+            "Configura HF_TOKEN en el servidor y acepta los terminos de kyutai/pocket-tts en Hugging Face."
+        )
+
     def download(self):
         logger.info("Descargando modelo: %s…", self.name)
         from pocket_tts import TTSModel
