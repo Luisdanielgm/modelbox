@@ -1,0 +1,29 @@
+# Entornos virtuales y caché de Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Caché de Hugging Face / modelos descargados (se bajan solos)
+.cache/
+models/supertonic/assets/
+
+# Audios generados
+outputs/
+
+# Audio de referencia personal — cada usuario debe poner el suyo
+reference.ogg
+reference.wav
+reference.mp3
+models/qwen3/reference.*
+*_tmp_ref_*.wav
+temp_ref_*.wav
+
+# Tooling interno (no es parte del proyecto)
+.atl/
+
+# Sistema operativo / editores
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

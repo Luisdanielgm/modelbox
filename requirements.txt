@@ -1,0 +1,7 @@
+# Interfaz unificada (app.py) + monitor de recursos.
+# Cada modelo tiene SUS dependencias en models/<modelo>/requirements.txt.
+# Instalar con uv (el venv no tiene pip):
+#   uv pip install --python .venv/Scripts/python.exe -r requirements.txt
+gradio==6.5.0
+psutil==7.2.2
+pytz==2026.2
