@@ -7,6 +7,8 @@ __pycache__/
 # Caché de Hugging Face / modelos descargados (se bajan solos)
 .cache/
 models/supertonic/assets/
+# Pesos gated de Pocket-TTS (clonación): cada usuario los baja con su login HF
+models/pockettts/weights/
 
 # Audios generados
 outputs/

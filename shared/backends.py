@@ -16,6 +16,7 @@ class Backend:
     name = "base"
     capabilities = {
         "clone": False,        # ¿clona voz desde audio de referencia?
+        "ref_text": False,     # ¿usa texto del audio de referencia? (solo Qwen)
         "presets": [],         # voces preset disponibles
         "languages": [],       # idiomas (vacío = no aplica / autodetecta)
         "has_speed": False,    # control de velocidad
@@ -37,6 +38,7 @@ class SupertonicBackend(Backend):
     name = "Supertonic-3"
     capabilities = {
         "clone": False,
+        "ref_text": False,
         "presets": ["M1", "M2", "M3", "M4", "M5", "F1", "F2", "F3", "F4", "F5"],
         # 32 idiomas reales de supertonic-3 (AVAILABLE_LANGUAGES); 'na' = language-agnostic.
         "languages": ["es", "en", "fr", "de", "it", "pt", "ru", "ja", "ko", "ar",
@@ -69,6 +71,7 @@ class QwenBackend(Backend):
     name = "Qwen3-TTS"
     capabilities = {
         "clone": True,
+        "ref_text": True,
         # Speakers reales del modelo CustomVoice (model.get_supported_speakers()).
         "presets": ["serena", "aiden", "dylan", "eric", "ryan", "vivian",
                     "sohee", "ono_anna", "uncle_fu"],
@@ -138,10 +141,15 @@ class QwenBackend(Backend):
 
 class PocketBackend(Backend):
     name = "Pocket-TTS"
+    # Pesos gated de clonación (los baja el usuario con su login HF). Si existen,
+    # la clonación se habilita sola; si no, queda en modo solo-presets.
+    _DIR = os.path.join(ROOT, "models", "pockettts")
+    _CLONE_WEIGHTS = os.path.join(_DIR, "weights", "model.safetensors")
+    _has_clone = os.path.exists(_CLONE_WEIGHTS)
+
     capabilities = {
-        # clone=True requiere los pesos gated de kyutai/pocket-tts:
-        # aceptar términos en HF + `hf auth login`. Una vez hecho, poné clone=True.
-        "clone": False,
+        "clone": _has_clone,
+        "ref_text": False,
         "presets": ["alba", "cosette", "marius", "javert", "jean", "anna", "vera",
                     "fantine", "charles", "paul", "eponine", "azelma", "george",
                     "mary", "jane", "michael", "eve", "giovanni", "lola", "juergen",
@@ -151,10 +159,24 @@ class PocketBackend(Backend):
         "has_steps": False,
     }
 
+    def _resolved_config(self):
+        """Genera el yaml de clonación con la ruta absoluta de los pesos locales."""
+        template = os.path.join(self._DIR, "clone_spanish.yaml")
+        with open(template, encoding="utf-8") as f:
+            text = f.read()
+        text = text.replace("__LOCAL_CLONE_WEIGHTS__", self._CLONE_WEIGHTS.replace("\\", "/"))
+        resolved = os.path.join(self._DIR, "weights", "_resolved.yaml")
+        with open(resolved, "w", encoding="utf-8") as f:
+            f.write(text)
+        return resolved
+
     def _ensure_loaded(self):
         if self._model is None:
             from pocket_tts import TTSModel
-            self._model = TTSModel.load_model()
+            if self._has_clone:
+                self._model = TTSModel.load_model(config=self._resolved_config())
+            else:
+                self._model = TTSModel.load_model()
 
     def synthesize(self, text, voice="alba", ref_audio=None, max_tokens=200, **_):
         import soundfile as sf

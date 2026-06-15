@@ -47,7 +47,7 @@ def on_model_change(model_name):
         gr.update(visible=caps["has_speed"]),
         gr.update(visible=caps["has_steps"]),
         gr.update(visible=caps["clone"]),
-        gr.update(visible=caps["clone"]),
+        gr.update(visible=caps["ref_text"]),
     )
 
 
@@ -67,6 +67,7 @@ def generate(model_name, text, voice, lang, speed, steps, ref_audio, ref_text):
         opts["steps"] = steps
     if caps["clone"]:
         opts["ref_audio"] = ref_audio
+    if caps["ref_text"]:
         opts["ref_text"] = ref_text or None
     try:
         path = backend.synthesize(text, **opts)
@@ -102,7 +103,7 @@ with gr.Blocks(title="TTS Multi-Modelo") as demo:
                                     label="Audio de referencia (clonación)",
                                     visible=init_caps["clone"])
             ref_text_in = gr.Textbox(label="Texto del audio de referencia (opcional)",
-                                     visible=init_caps["clone"])
+                                     visible=init_caps["ref_text"])
 
             gen_btn = gr.Button("Generar", variant="primary")
             status = gr.Markdown("")

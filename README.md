@@ -15,11 +15,12 @@ máquina, sin llamadas a la nube.
 | Modelo        | Runtime       | RAM aprox.   | Clonación de voz            | Presets        |
 |---------------|---------------|--------------|-----------------------------|----------------|
 | Supertonic-3  | ONNX (CPU)    | <1 GB        | No (solo presets)           | M1–M5, F1–F5   |
-| Pocket-TTS    | PyTorch (CPU) | ~0.7 GB      | Sí (gated — ver más abajo)  | 22+ voces      |
+| Pocket-TTS    | PyTorch (CPU) | ~0.7–1.3 GB  | Sí (pesos gated — ver abajo)| 22+ voces      |
 | Qwen3-TTS     | Transformers  | ~9.6 GB      | Sí (audio de referencia)    | 9 voces        |
 
-> **¿Poco RAM (VPS)?** Supertonic y Pocket-TTS corren en <1 GB y sirven para un
-> VPS de 4 GB sin GPU. Qwen necesita ~9.6 GB residentes (no apto para VPS chico).
+> **¿Poco RAM (VPS)?** Supertonic y Pocket-TTS corren en ~1 GB (Pocket llega a
+> ~1.3 GB clonando) y sirven para un VPS de 4 GB sin GPU. Qwen necesita ~9.6 GB
+> residentes (no apto para VPS chico).
 
 Cada modelo declara sus capacidades en `shared/backends.py`; la interfaz muestra
 u oculta controles según el modelo activo (p. ej. la clonación por audio solo
@@ -110,10 +111,20 @@ Pocket-TTS soporta clonación, pero esos pesos son **gated** en Hugging Face. Po
 defecto se descarga la variante de solo-presets. Para habilitar la clonación:
 
 1. Entrá a https://huggingface.co/kyutai/pocket-tts y **aceptá los términos**.
-2. Logueate local: `hf auth login` (pegá tu token de Hugging Face).
-3. En `shared/backends.py`, en `PocketBackend.capabilities`, poné `"clone": True`.
+2. Descargá el `model.safetensors` del idioma que quieras (p. ej. español:
+   `languages/spanish/model.safetensors`) y guardalo en:
+   ```
+   models/pockettts/weights/model.safetensors
+   ```
+   (Alternativa: `hf auth login` y dejar que se baje solo.)
 
-Después, la clonación de Pocket-TTS aparece en la interfaz como en Qwen.
+Listo — el backend **detecta el archivo y habilita la clonación solo**, sin tocar
+código. La clonación de Pocket-TTS aparece en la interfaz como en Qwen. Si el
+archivo no está, Pocket queda en modo solo-presets.
+
+> Nota: el config `models/pockettts/clone_spanish.yaml` está armado para español.
+> Para clonar en otro idioma, descargá ese `model.safetensors` y ajustá las rutas
+> de idioma del yaml.
 
 ## Agregar un modelo nuevo
 
