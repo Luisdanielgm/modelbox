@@ -37,7 +37,7 @@ MAX_UPLOAD_MB = int(os.environ.get("MODELBOX_MAX_UPLOAD_MB", "25"))
 
 def _require_token(authorization: str | None = Header(default=None)) -> None:
     if not API_TOKEN:
-        raise HTTPException(status_code=503, detail="API deshabilitada (configurá API_TOKEN).")
+        raise HTTPException(status_code=503, detail="API deshabilitada (configurar API_TOKEN).")
     # compare_digest: comparación de tiempo constante (no filtra el token byte a byte).
     if not secrets.compare_digest(authorization or "", f"Bearer {API_TOKEN}"):
         raise HTTPException(status_code=401, detail="Token inválido o ausente.")

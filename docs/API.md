@@ -1,7 +1,7 @@
 # Modelbox — API REST
 
-API HTTP para generar audio TTS desde tus aplicaciones. Convive con el panel
-visual en el mismo proceso y puerto (por defecto `7860`).
+API HTTP para generar voz (TTS), clonar y transcribir (STT) desde aplicaciones
+externas. Convive con el panel visual en el mismo proceso y puerto (por defecto `7860`).
 
 > Docs interactivas (Swagger) autogeneradas en **`/api/docs`**.
 
@@ -60,7 +60,7 @@ los pedidos extra esperan su turno, no fallan.
 ### `GET /api/models`
 
 Devuelve cada modelo con sus capacidades (voces preset, idiomas, controles).
-Usalo para saber qué `voice`/`lang` acepta cada modelo.
+Permite saber qué `voice`/`lang` acepta cada modelo.
 
 ```json
 [

@@ -98,11 +98,11 @@ def set_enable(model_name, value):
 
 def generate(model_name, text, voice, lang, speed, steps, ref_audio, ref_text):
     if not text or not text.strip():
-        yield None, "Escribí algo de texto primero."
+        yield None, "Falta el texto a sintetizar."
         return
     backend = BACKENDS[model_name]
     if not backend.is_downloaded():
-        yield None, f"Descargá el modelo {model_name} primero (botón de arriba)."
+        yield None, f"El modelo {model_name} no está descargado (usar el botón Descargar)."
         return
     caps = backend.capabilities
     opts = {}
@@ -184,9 +184,9 @@ def transcribe(audio_path, language):
     if not WHISPER:
         return "", "Whisper no está incluido en este build."
     if not audio_path:
-        return "", "Subí o grabá un audio primero."
+        return "", "Falta el audio (subir o grabar uno)."
     if not WHISPER.is_downloaded():
-        return "", "Descargá Whisper primero (botón de arriba)."
+        return "", "Whisper no está descargado (usar el botón Descargar)."
     try:
         with inference.slot():
             result = WHISPER.transcribe(audio_path, language=language or None)
@@ -208,7 +208,7 @@ def _api_md():
     estado = ("🟢 **API activa** — el servidor tiene `API_TOKEN` configurado."
               if API_ENABLED else
               "🔴 **API desactivada** — el servidor NO tiene `API_TOKEN`. "
-              "Configurá esa variable de entorno para habilitarla.")
+              "Configurar esa variable de entorno para habilitarla.")
     incl_tts = ", ".join(MODEL_NAMES) or "— (ninguno en este build)"
     incl_stt = WHISPER.name if WHISPER else "— (no incluido)"
     header = (
@@ -216,7 +216,7 @@ def _api_md():
         f"**Modelos en este build** — Voz (TTS): {incl_tts} · Transcripción (STT): {incl_stt}\n\n"
         "Un modelo responde por API solo si está **descargado** *y* **habilitado** "
         "(el toggle «Habilitar en la API» de cada pestaña). El token de la API se "
-        "configura en el servidor (env var `API_TOKEN`), no acá.\n\n"
+        "configura en el servidor (env var `API_TOKEN`), no aquí.\n\n"
     )
     body = """### Autenticación
 
@@ -260,21 +260,21 @@ open("salida.wav", "wb").write(r.content)
 ```
 
 Docs interactivas (Swagger): **[/api/docs](/api/docs)** · estado: **[/api/health](/api/health)**.
-Reemplazá `<host>` por la URL de este servidor.
+Reemplazar `<host>` por la URL de este servidor.
 """
     return header + body
 
 
 with gr.Blocks(title="Modelbox") as demo:
-    gr.Markdown("# Modelbox\nGenerá voz, transcribí y exponé todo por API. Todo corre en tu máquina.")
+    gr.Markdown("# Modelbox\nSíntesis de voz, transcripción (STT) y API REST — todo en local.")
 
     with gr.Row():
         with gr.Column(scale=3):
             with gr.Tabs():
                 if MODEL_NAMES:
                     with gr.Tab("Generar voz (TTS)"):
-                        gr.Markdown(f"Modelos en este build: **{', '.join(MODEL_NAMES)}**. "
-                                    "Elegí uno, **descargalo**, y después generá.")
+                        gr.Markdown(f"Modelos incluidos en esta imagen: **{', '.join(MODEL_NAMES)}**. "
+                                    "Seleccionar uno, **descargarlo** y generar.")
                         model_dd = gr.Dropdown(MODEL_NAMES, value=DEFAULT_MODEL, label="Modelo")
                         model_status = gr.Markdown(_status_md(DEFAULT_MODEL))
                         with gr.Row():
@@ -286,7 +286,7 @@ with gr.Blocks(title="Modelbox") as demo:
                                 info="Permite consumir este modelo por /api/tts (requiere API_TOKEN en el servidor).",
                                 value=state.is_enabled(DEFAULT_MODEL))
                         text_in = gr.Textbox(label="Texto", lines=3,
-                                             placeholder="Escribí lo que querés sintetizar...")
+                                             placeholder="Texto a sintetizar...")
 
                         init_caps = BACKENDS[DEFAULT_MODEL].capabilities
                         voice_dd = gr.Dropdown(init_caps["presets"],

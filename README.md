@@ -2,8 +2,8 @@
 
 Hub de inferencia local multi-modelo: **texto-a-voz (TTS)** y **transcripción
 (STT)** intercambiables tras una interfaz única (con login opcional) y una **API
-REST** con token, más monitor de recursos y cola de inferencia en vivo. Todo en
-tu máquina, sin llamadas a la nube.
+REST** con token, más monitor de recursos y cola de inferencia en vivo. Todo se
+ejecuta localmente, sin llamadas a la nube.
 
 > **Arquitectura:** `models/` + backends por capacidad. Agregar un modelo (o un
 > nuevo tipo, como LLMs de texto) no requiere reescribir la interfaz.
@@ -14,12 +14,12 @@ tu máquina, sin llamadas a la nube.
 
 ```bash
 git clone <URL-del-repo> && cd modelbox
-cp .env.example .env          # opcional: credenciales y config (compose lo lee solo)
+cp .env.example .env          # opcional: credenciales y configuración (compose lo lee solo)
 docker compose up -d --build
 ```
 
-Abrí <http://localhost:7860>, elegí un modelo, apretá **Descargar** y generá.
-Detalle y opciones en [Docker / Despliegue](#docker--despliegue).
+Acceder a <http://localhost:7860>, seleccionar un modelo, presionar **Descargar**
+y generar. Detalle y opciones en [Docker / Despliegue](#docker--despliegue).
 
 **Sin Docker (Python 3.10+):**
 
@@ -30,11 +30,11 @@ pip install -r requirements.txt -r models/supertonic/requirements.txt
 python server.py
 ```
 
-Abrí <http://127.0.0.1:7860>. Instalá los requirements de cada modelo que quieras
-usar (ver [Instalación](#instalación-desde-cero)).
+Acceder a <http://127.0.0.1:7860>. Instalar los requirements de cada modelo a
+utilizar (ver [Instalación](#instalación-desde-cero)).
 
-**En un VPS:** [Dokploy](#en-un-vps-con-dokploy) construye la imagen en tu propio
-servidor desde el repo (sin Docker Hub).
+**En un VPS:** [Dokploy](#en-un-vps-con-dokploy) construye la imagen en el propio
+servidor desde el repositorio (sin Docker Hub).
 
 ## Modelos incluidos
 
@@ -92,25 +92,25 @@ uv venv                       # crea .venv
 #   Windows (PowerShell):  .venv\Scripts\Activate.ps1
 #   Linux / macOS:         source .venv/bin/activate
 
-# 4) Instalar dependencias de la app + del/los modelo(s) que quieras usar
+# 4) Instalar dependencias de la app + del/los modelo(s) a utilizar
 uv pip install -r requirements.txt                     # app (gradio + API)
 uv pip install -r models/supertonic/requirements.txt   # Supertonic (TTS, sin torch)
 uv pip install -r models/pockettts/requirements.txt    # Pocket-TTS (TTS, clonación)
 uv pip install -r models/whisper/requirements.txt      # Whisper (STT, sin torch)
 uv pip install -r models/qwen3/requirements.txt        # Qwen (TTS pesado, opcional)
-#   (con pip estándar, reemplazá "uv pip" por "pip")
+#   (con pip estándar, reemplazar "uv pip" por "pip")
 ```
 
-> Los modelos **no se descargan solos**: cada uno se baja cuando le das
+> Los modelos **no se descargan solos**: cada uno se descarga al presionar
 > **Descargar** en el panel (Supertonic ~385 MB; Pocket ~100 MB; Qwen ~3 GB por
-> modelo). Así no arrastrás un modelo pesado como Qwen si no lo vas a usar. Lo
+> modelo). Así no se incluye un modelo pesado como Qwen si no se va a usar. Lo
 > descargado queda cacheado (en Docker, en un volumen). La primera generación de
 > Qwen en CPU puede tardar 1–2 minutos.
 
-### GPU (opcional, recomendado si tenés NVIDIA)
+### GPU (opcional, recomendado con NVIDIA)
 
-Por defecto se instala PyTorch CPU (sirve en cualquier lado, incluido VPS). Si
-tenés una GPU NVIDIA, instalá el build CUDA para acelerar **Pocket-TTS** (~3x más
+Por defecto se instala PyTorch CPU (sirve en cualquier entorno, incluido un VPS).
+Con una GPU NVIDIA, instalar el build CUDA para acelerar **Pocket-TTS** (~3x más
 rápido y habilita streaming en vivo). Con ~1 GB de VRAM alcanza:
 
 ```bash
@@ -128,17 +128,18 @@ chicas). El panel de Recursos muestra la VRAM cuando hay GPU.
 python server.py        # o: uvicorn server:app --host 0.0.0.0 --port 7860
 ```
 
-Abrí `http://127.0.0.1:7860`. **Panel** en `/` y **API REST** en `/api/*`, mismo
-proceso y puerto. En el panel: elegí modelo, **Descargá** el que quieras usar,
-escribí texto y generá. El panel de recursos se actualiza en vivo.
+Acceder a `http://127.0.0.1:7860`. **Panel** en `/` y **API REST** en `/api/*`,
+mismo proceso y puerto. En el panel: seleccionar un modelo, **Descargar** el que
+se quiera usar, escribir el texto y generar. El panel de recursos se actualiza en
+vivo.
 
-> Correr `python app.py` también funciona, pero levanta **solo el panel** (sin
-> API ni login). Para el servicio completo usá `server.py`.
+> Ejecutar `python app.py` también funciona, pero levanta **solo el panel** (sin
+> API ni login). Para el servicio completo, usar `server.py`.
 
 ### Seguridad (opcional, por variables de entorno)
 
-Los secretos son **opcionales**, pensado para que cualquiera pueda clonar y correr
-el panel sin configurar nada:
+Los secretos son **opcionales**, pensado para que cualquiera pueda clonar y
+ejecutar el panel sin configurar nada:
 
 | Variable | Efecto |
 |----------|--------|
@@ -186,7 +187,7 @@ python models/pockettts/run.py --text "Hola" --voice alba
 
 # Qwen — preset
 python models/qwen3/run.py --text "Hola" --voice serena
-# Qwen — clonación de voz (poné tu propio audio)
+# Qwen — clonación de voz (usar un audio propio)
 python models/qwen3/run.py --text "Hola" --ref_audio mi_voz.wav
 
 # Whisper — transcripción (STT)
@@ -197,53 +198,53 @@ Los audios se guardan en `outputs/`.
 
 ### Clonación de voz (Qwen)
 
-Para clonar una voz necesitás un audio de referencia. **Vos ponés el tuyo**: en
-la interfaz podés grabarlo con el micrófono o subir un archivo; por CLI usá
-`--ref_audio`. Alternativamente, si colocás un `reference.ogg`/`.wav`/`.mp3` en
-`models/qwen3/`, el script CLI lo detecta solo. **Cloná solo voces para las que
-tengas consentimiento.**
+Para clonar una voz se necesita un audio de referencia. **Cada usuario provee el
+suyo**: en la interfaz se puede grabar con el micrófono o subir un archivo; por
+CLI se usa `--ref_audio`. Alternativamente, si se coloca un
+`reference.ogg`/`.wav`/`.mp3` en `models/qwen3/`, el script CLI lo detecta solo.
+**Clonar únicamente voces para las que se cuente con consentimiento.**
 
 ### Habilitar clonación en Pocket-TTS (opcional, gated)
 
 Pocket-TTS soporta clonación, pero esos pesos son **gated** en Hugging Face. Por
 defecto se descarga la variante de solo-presets. Para habilitar la clonación:
 
-1. Entrá a https://huggingface.co/kyutai/pocket-tts y **aceptá los términos**.
-2. Descargá el `model.safetensors` del idioma que quieras (p. ej. español:
-   `languages/spanish/model.safetensors`) y guardalo en:
+1. Acceder a https://huggingface.co/kyutai/pocket-tts y **aceptar los términos**.
+2. Descargar el `model.safetensors` del idioma deseado (p. ej. español:
+   `languages/spanish/model.safetensors`) y guardarlo en:
    ```
    models/pockettts/weights/model.safetensors
    ```
-   (Alternativa: `hf auth login` y dejar que se baje solo.)
+   (Alternativa: `hf auth login` y permitir que se descargue solo.)
 
 Listo — el backend **detecta el archivo y habilita la clonación solo**, sin tocar
-código. La clonación de Pocket-TTS aparece en la interfaz como en Qwen. Si el
+código. La clonación de Pocket-TTS aparece en la interfaz igual que en Qwen. Si el
 archivo no está, Pocket queda en modo solo-presets.
 
 > Nota: el config `models/pockettts/clone_spanish.yaml` está armado para español.
-> Para clonar en otro idioma, descargá ese `model.safetensors` y ajustá las rutas
-> de idioma del yaml.
+> Para clonar en otro idioma, descargar ese `model.safetensors` y ajustar las
+> rutas de idioma del yaml.
 
 ## Docker / Despliegue
 
 La imagen corre en **CPU** (sirve en un VPS sin GPU).
 
-> **No hace falta Docker Hub.** La imagen se construye en el lugar donde la vayas
-> a correr (tu máquina o el VPS) a partir del `Dockerfile`. Nunca se publica en
-> ningún registro a menos que hagas `docker push` a propósito.
+> **No hace falta Docker Hub.** La imagen se construye en el lugar donde se vaya a
+> ejecutar (máquina local o VPS) a partir del `Dockerfile`. Nunca se publica en
+> ningún registro a menos que se haga `docker push` a propósito.
 
 **Librerías vs. pesos** (dos cosas distintas):
 
 | | Dónde vive | Cuándo |
 |---|---|---|
 | **Librerías** (torch, transformers…) | dentro de la **imagen** | en el build (cacheadas: no se reinstalan si no cambian los requirements) |
-| **Pesos** de los modelos (los GB de HF) | en un **volumen** | los descargás desde el panel; sobreviven a los redeploys |
+| **Pesos** de los modelos (los GB de HF) | en un **volumen** | se descargan desde el panel; sobreviven a los redeploys |
 
 ### Elegir qué modelos incluir (imagen liviana)
 
 El build arg `MODELS` decide qué modelos (y por ende qué librerías) entran en la
-imagen. Solo se instala lo necesario — p. ej. **torch (~742 MB) solo si incluís
-Pocket o Qwen**, y **ffmpeg (~450 MB) solo si incluís Qwen**:
+imagen. Solo se instala lo necesario — p. ej. **torch (~742 MB) solo si se incluye
+Pocket o Qwen**, y **ffmpeg (~450 MB) solo si se incluye Qwen**:
 
 ```bash
 # Imagen mínima, sin torch (~0.7 GB)
@@ -257,17 +258,17 @@ docker build -t modelbox .
 ```
 
 Con compose: `MODELS=supertonic,pocket docker compose up -d --build`. En Dokploy
-se setea como **Build Arg**. El panel y la API muestran solo los modelos
+se configura como **Build Arg**. El panel y la API muestran solo los modelos
 incluidos en el build.
 
-### Local (probar en tu máquina)
+### Local (probar en la máquina)
 
 ```bash
-cp .env.example .env       # opcional: configurá credenciales (compose lo lee solo)
+cp .env.example .env       # opcional: configurar credenciales (compose lo lee solo)
 docker compose up -d --build
 ```
 
-Abrí `http://localhost:7860`. Los audios quedan en `./outputs/`. Para apagar:
+Acceder a `http://localhost:7860`. Los audios quedan en `./outputs/`. Para apagar:
 `docker compose down` (los modelos descargados sobreviven en los volúmenes).
 
 > El `.env` es opcional: sin él, el panel queda abierto y la API apagada (los
@@ -276,16 +277,16 @@ Abrí `http://localhost:7860`. Los audios quedan en `./outputs/`. Para apagar:
 
 ### En un VPS con Dokploy
 
-Dokploy construye la imagen en tu propio servidor desde el repo Git (privado o
-público) — sin pasar por Docker Hub:
+Dokploy construye la imagen en el propio servidor desde el repositorio Git
+(privado o público) — sin pasar por Docker Hub:
 
-1. **Create Application** → conectá este repositorio.
+1. **Create Application** → conectar este repositorio.
 2. **Build Type: `Dockerfile`** (no Nixpacks: este proyecto es Python + libs de
    sistema y necesita el `Dockerfile`).
 3. **Build Args** (opcional) → `MODELS=supertonic,pocket` para una imagen sin
    Qwen/torch-pesado. Por defecto entran los tres.
-4. **Port: `7860`** y asigná un dominio (Dokploy maneja el proxy y el SSL).
-5. **Environment** → configurá las credenciales (ver tabla de Seguridad arriba):
+4. **Port: `7860`** y asignar un dominio (Dokploy maneja el proxy y el SSL).
+5. **Environment** → configurar las credenciales (ver tabla de Seguridad arriba):
    - `PANEL_USER`, `PANEL_PASSWORD` → login del panel.
    - `API_TOKEN` → token de la API.
 6. **Volumes / Mounts** (importante, para no re-descargar varios GB en cada
@@ -294,11 +295,11 @@ público) — sin pasar por Docker Hub:
    - `/data/state` → estado (modelos descargados / habilitados para la API).
    - `/app/models/supertonic/assets` → pesos de Supertonic-3.
    - `/app/outputs` → audios generados.
-7. **Deploy.** En cada push, Dokploy reconstruye desde el repo.
+7. **Deploy.** En cada push, Dokploy reconstruye desde el repositorio.
 
 > **RAM:** un VPS de 4 GB alcanza para Supertonic y Pocket-TTS. **Qwen3-TTS
-> necesita ~9.6 GB residentes** — en un VPS chico, simplemente no lo selecciones
-> en la interfaz (la carga es perezosa: si no lo elegís, no ocupa RAM).
+> necesita ~9.6 GB residentes** — en un VPS chico, no seleccionarlo en la interfaz
+> (la carga es perezosa: si no se elige, no ocupa RAM).
 
 ### Sin Dokploy (build directo en el VPS)
 
@@ -320,4 +321,4 @@ Mismo resultado: la imagen se construye en el VPS y solo existe ahí.
 
 El **código** está bajo licencia MIT (ver `LICENSE`). Los **modelos** que se
 descargan tienen licencias propias (Supertonic: OpenRAIL-M; Qwen: ver su repo
-en Hugging Face) que debés respetar por separado.
+en Hugging Face) que deben respetarse por separado.
