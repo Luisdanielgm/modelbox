@@ -16,6 +16,13 @@ Todas las llamadas protegidas requieren el header:
 Authorization: Bearer <API_TOKEN>
 ```
 
+## Precio actual
+
+Durante el periodo inicial de prueba, el precio actual es **USD 0**.
+
+- `GET /api/pricing` devuelve el precio vigente sin token.
+- `GET /api/usage` incluye el mismo bloque `pricing` junto al resumen de uso.
+
 ## Requisito previo
 
 Un modelo solo responde por API si está:
@@ -76,6 +83,35 @@ Permite saber qué `voice`/`lang` acepta cada modelo.
     }
   }
 ]
+```
+
+### `GET /api/usage`
+
+Devuelve el registro persistente de llamadas y un resumen agregado. Requiere token.
+
+Query params:
+
+| Campo | Tipo | Default | Notas |
+|-------|------|---------|-------|
+| `limit` | int | `100` | M?ximo `1000` |
+| `type` | string | ? | Opcional: `tts`, `clone`, `transcribe` |
+
+El log vive en el volumen persistente: `/modelbox-data/logs/calls.jsonl`.
+No guarda texto crudo ni audio: solo métricas como tipo, modelo, caracteres, tamaño de subida, duración, espera de cola, concurrencia observada, estado HTTP y error si falló.
+
+```json
+{
+  "pricing": { "currency": "USD", "price_per_call": 0 },
+  "summary": {
+    "total_calls": 10,
+    "total_text_chars": 3200,
+    "max_text_chars": 900,
+    "max_duration_seconds": 18.2,
+    "max_wait_seconds": 3.1,
+    "by_type": { "tts": 7, "clone": 1, "transcribe": 2 }
+  },
+  "calls": []
+}
 ```
 
 ### `POST /api/tts`
@@ -150,6 +186,10 @@ curl -X POST http://localhost:7860/api/clone \
 curl -X POST http://localhost:7860/api/transcribe \
   -H "Authorization: Bearer $API_TOKEN" \
   -F "audio=@grabacion.mp3" -F "language=es"
+
+# Leer uso reciente
+curl -H "Authorization: Bearer $API_TOKEN" \
+  "http://localhost:7860/api/usage?limit=100"
 ```
 
 ### Python

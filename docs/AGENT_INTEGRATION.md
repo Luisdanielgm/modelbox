@@ -12,12 +12,16 @@ The visual panel may require username/password, but API execution uses a Bearer 
    - `POST /api/tts` for preset TTS.
    - `POST /api/clone` for voice cloning.
    - `POST /api/transcribe` for STT.
+5. Read usage later with `GET /api/usage?limit=100`.
+
+Current price: **USD 0** during the initial trial period. Use `/api/pricing` to read the current pricing object.
 
 ## Public references
 
 | URL | Purpose | Auth |
 |-----|---------|------|
 | `/api/health` | Runtime health, queue, storage, downloaded/enabled state | none |
+| `/api/pricing` | Current price. During the initial trial it returns USD 0 | none |
 | `/api/openapi.json` | Machine-readable OpenAPI schema | none |
 | `/api/agent-guide` | This concise agent guide | none |
 | `/api/docs` | Swagger UI | may be less convenient for agents |
@@ -86,6 +90,41 @@ Response:
 { "text": "...", "language": "es" }
 ```
 
+### `GET /api/usage`
+
+Use this to read the persisted call log and summary. It requires the Bearer token.
+
+Query parameters:
+
+- `limit`: number of recent rows to return, max `1000`.
+- `type`: optional filter: `tts`, `clone`, or `transcribe`.
+
+Response shape:
+
+```json
+{
+  "pricing": { "currency": "USD", "price_per_call": 0 },
+  "summary": {
+    "total_calls": 12,
+    "total_text_chars": 4500,
+    "max_duration_seconds": 23.61,
+    "max_wait_seconds": 4.2
+  },
+  "calls": [
+    {
+      "type": "tts",
+      "model": "Pocket-TTS",
+      "text_chars": 120,
+      "duration_seconds": 4.8,
+      "wait_seconds": 0,
+      "success": true
+    }
+  ]
+}
+```
+
+The log lives in the persistent volume at `/modelbox-data/logs/calls.jsonl`. It stores metadata only: no raw text and no audio bytes.
+
 ## Minimal examples
 
 ### curl TTS
@@ -129,3 +168,9 @@ const audio = await response.arrayBuffer();
 
 Pocket cloning requires `capabilities.clone=true` for `Pocket-TTS` in `/api/models`.
 If false, the server is missing `/modelbox-data/pocket-weights/model.safetensors`.
+
+## Practical limits
+
+Modelbox currently has no hard text-character limit in the API. For reliability, split long TTS jobs into chunks of about 1,000-2,000 characters and merge audio client-side if needed.
+
+Audio upload size is capped by `MODELBOX_MAX_UPLOAD_MB` (default: 25 MB), so STT and cloning duration depend mostly on audio bitrate and file size.

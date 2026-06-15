@@ -252,13 +252,15 @@ def _api_md():
     header = (
         f"## Usar Modelbox por API\n\n{estado}\n\n"
         f"**Modelos en este build** — Voz (TTS): {incl_tts} · Transcripción (STT): {incl_stt}\n\n"
+        "**Precio actual:** USD 0 durante el periodo inicial de prueba. "
+        "Más adelante se definirá el precio definitivo.\n\n"
         "Un modelo responde por API solo si está **descargado** *y* **habilitado** "
         "(el toggle «Habilitar en la API» de cada pestaña). El token de la API se "
         "configura en el servidor (env var `API_TOKEN`), no aquí.\n\n"
     )
     body = """### Autenticación
 
-Todas las rutas (salvo `/api/health`) requieren el header:
+Todas las rutas protegidas requieren el header:
 
 ```
 Authorization: Bearer <API_TOKEN>
@@ -269,7 +271,9 @@ Authorization: Bearer <API_TOKEN>
 | Método | Ruta | Descripción |
 |---|---|---|
 | GET | `/api/health` | Estado + cola + modelos (sin token) |
+| GET | `/api/pricing` | Precio actual: USD 0 en periodo inicial de prueba |
 | GET | `/api/models` | Modelos TTS y sus capacidades |
+| GET | `/api/usage` | Registro de llamadas + resumen (requiere token) |
 | POST | `/api/tts` | Genera voz (preset) → WAV |
 | POST | `/api/clone` | Clona voz desde un audio → WAV |
 | POST | `/api/transcribe` | Transcribe un audio → texto |
@@ -278,15 +282,19 @@ Authorization: Bearer <API_TOKEN>
 
 ```bash
 # Generar voz
-curl -X POST <host>/api/tts \\
-  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \\
-  -d '{"model":"Supertonic-3","text":"Hola mundo","voice":"F1","lang":"es"}' \\
+curl -X POST <host>/api/tts \
+  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"model":"Supertonic-3","text":"Hola mundo","voice":"F1","lang":"es"}' \
   --output salida.wav
 
 # Transcribir (multipart)
-curl -X POST <host>/api/transcribe \\
-  -H "Authorization: Bearer $API_TOKEN" \\
+curl -X POST <host>/api/transcribe \
+  -H "Authorization: Bearer $API_TOKEN" \
   -F "audio=@grabacion.mp3" -F "language=es"
+
+# Leer uso reciente
+curl <host>/api/usage?limit=100 \
+  -H "Authorization: Bearer $API_TOKEN"
 ```
 
 ```python
@@ -297,7 +305,9 @@ r = requests.post("<host>/api/tts",
 open("salida.wav", "wb").write(r.content)
 ```
 
-Docs interactivas (Swagger): **[/api/docs](/api/docs)** · estado: **[/api/health](/api/health)**.
+El registro de uso se guarda en el volumen (`/modelbox-data/logs/calls.jsonl`) y no almacena texto ni audio crudo: solo métricas como tipo, modelo, caracteres, duración, espera de cola y estado HTTP.
+
+Docs interactivas (Swagger): **[/api/docs](/api/docs)** · estado: **[/api/health](/api/health)** · precio: **[/api/pricing](/api/pricing)**.
 Reemplazar `<host>` por la URL de este servidor.
 """
     return header + body

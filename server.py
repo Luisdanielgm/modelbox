@@ -19,16 +19,17 @@ import os
 from pathlib import Path
 import secrets
 import tempfile
+import time
 
 import gradio as gr
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app import demo
-from shared import inference, state
+from shared import inference, state, usage
 from shared.backends import BACKENDS
-from shared.paths import DATA_DIR, OUTPUTS, POCKET_WEIGHTS, STATE_DIR, SUPERTONIC_DIR
+from shared.paths import DATA_DIR, LOGS_DIR, OUTPUTS, POCKET_WEIGHTS, STATE_DIR, SUPERTONIC_DIR
 from shared.transcribe import TRANSCRIBERS
 
 API_TOKEN = os.environ.get("API_TOKEN")
@@ -67,6 +68,35 @@ def _read_capped(upload: UploadFile) -> bytes:
     return data
 
 
+def _mb(size_bytes: int | None) -> float:
+    return round((size_bytes or 0) / 1e6, 4)
+
+
+def _call_error(e: HTTPException | None) -> str | None:
+    if e is None:
+        return None
+    return str(e.detail)
+
+
+def _record_call(call: dict, started_at: float, slot_meta: dict | None,
+                 error: HTTPException | None = None) -> None:
+    """Best-effort audit log. It must never break the user request."""
+    try:
+        usage.append_call({
+            **call,
+            "duration_seconds": round(time.perf_counter() - started_at, 4),
+            "status_code": error.status_code if error else 200,
+            "success": error is None,
+            "error": _call_error(error),
+            "wait_seconds": (slot_meta or {}).get("wait_seconds", 0),
+            "queue_before": (slot_meta or {}).get("queue_before"),
+            "queue_at_start": (slot_meta or {}).get("queue_at_start"),
+            "queue_at_finish": inference.status(),
+        })
+    except Exception:
+        pass
+
+
 app = FastAPI(title="Modelbox API", docs_url="/api/docs", openapi_url="/api/openapi.json")
 AGENT_GUIDE = Path(__file__).parent / "docs" / "AGENT_INTEGRATION.md"
 
@@ -99,6 +129,7 @@ def health():
             "storage": {
                 "modelbox_data_dir": DATA_DIR,
                 "state_dir": STATE_DIR,
+                "logs_dir": LOGS_DIR,
                 "outputs_dir": OUTPUTS,
                 "supertonic_dir": SUPERTONIC_DIR,
                 "pocket_weights": POCKET_WEIGHTS,
@@ -118,6 +149,17 @@ def health():
             "transcribers": [_model_info(n, t) for n, t in TRANSCRIBERS.items()]}
 
 
+@app.get("/api/pricing")
+def pricing():
+    return usage.TRIAL_PRICING
+
+
+@app.get("/api/usage", dependencies=[Depends(_require_token)])
+def get_usage(limit: int = Query(100, ge=1, le=1000),
+              type: str | None = Query(None, description="Filter by tts, clone, or transcribe")):
+    return usage.usage_payload(limit=limit, call_type=type)
+
+
 @app.get("/api/models", dependencies=[Depends(_require_token)])
 def list_models():
     return [{**_model_info(n, b), "capabilities": b.capabilities}
@@ -126,117 +168,173 @@ def list_models():
 
 @app.post("/api/tts", dependencies=[Depends(_require_token)])
 def tts(req: TTSRequest):
-    backend = BACKENDS.get(req.model)
-    if backend is None:
-        raise HTTPException(404, f"Modelo desconocido: {req.model}")
-    if not backend.is_downloaded():
-        raise HTTPException(409, f"El modelo {req.model} no está descargado.")
-    if not state.is_enabled(req.model):
-        raise HTTPException(403, f"El modelo {req.model} no está habilitado para la API.")
-    if not req.text or not req.text.strip():
-        raise HTTPException(400, "Falta el texto.")
-
-    caps = backend.capabilities
-    opts = {}
-    if caps["presets"] and req.voice:
-        opts["voice"] = req.voice
-    if caps["languages"] and req.lang:
-        opts["lang"] = req.lang
-    if caps["has_speed"] and req.speed is not None:
-        opts["speed"] = req.speed
-    if caps["has_steps"] and req.steps is not None:
-        opts["steps"] = req.steps
-
+    started_at = time.perf_counter()
+    slot_meta = None
+    error = None
+    call = {
+        "id": usage.new_request_id(),
+        "type": "tts",
+        "model": req.model,
+        "voice": req.voice,
+        "lang": req.lang,
+        "text_chars": len(req.text or ""),
+        "output_bytes": 0,
+    }
     try:
-        with inference.slot():
+        backend = BACKENDS.get(req.model)
+        if backend is None:
+            raise HTTPException(404, f"Modelo desconocido: {req.model}")
+        if not backend.is_downloaded():
+            raise HTTPException(409, f"El modelo {req.model} no est? descargado.")
+        if not state.is_enabled(req.model):
+            raise HTTPException(403, f"El modelo {req.model} no est? habilitado para la API.")
+        if not req.text or not req.text.strip():
+            raise HTTPException(400, "Falta el texto.")
+
+        caps = backend.capabilities
+        opts = {}
+        if caps["presets"] and req.voice:
+            opts["voice"] = req.voice
+        if caps["languages"] and req.lang:
+            opts["lang"] = req.lang
+        if caps["has_speed"] and req.speed is not None:
+            opts["speed"] = req.speed
+        if caps["has_steps"] and req.steps is not None:
+            opts["steps"] = req.steps
+
+        with inference.slot() as slot_meta:
             path = backend.synthesize(req.text, **opts)
-    except HTTPException:
+        data = _read_wav_and_cleanup(path)
+        call["output_bytes"] = len(data)
+        return Response(content=data, media_type="audio/wav")
+    except HTTPException as e:
+        error = e
         raise
     except Exception as e:
-        raise HTTPException(500, f"Error de síntesis: {e}")
+        error = HTTPException(500, f"Error de s?ntesis: {e}")
+        raise error
+    finally:
+        _record_call(call, started_at, slot_meta, error)
 
-    return _wav_response_and_cleanup(path)
 
-
-def _wav_response_and_cleanup(path):
+def _read_wav_and_cleanup(path) -> bytes:
     """Lee el WAV, lo borra (la API no guarda audios) y lo devuelve."""
     if not path or not os.path.exists(path):
-        raise HTTPException(500, "La síntesis no produjo un archivo de audio.")
+        raise HTTPException(500, "La s?ntesis no produjo un archivo de audio.")
     with open(path, "rb") as f:
         data = f.read()
     try:
         os.remove(path)
     except OSError:
         pass
-    return Response(content=data, media_type="audio/wav")
+    return data
 
 
 @app.post("/api/clone", dependencies=[Depends(_require_token)])
 def clone(model: str = Form(...), text: str = Form(...),
           ref_audio: UploadFile = File(...), ref_text: str = Form(None)):
     """Clona voz desde un audio de referencia. El audio se procesa y se borra."""
-    backend = BACKENDS.get(model)
-    if backend is None:
-        raise HTTPException(404, f"Modelo desconocido: {model}")
-    if not backend.capabilities.get("clone"):
-        raise HTTPException(400, f"{model} no soporta clonación.")
-    if not backend.is_downloaded():
-        raise HTTPException(409, f"El modelo {model} no está descargado.")
-    if not state.is_enabled(model):
-        raise HTTPException(403, f"El modelo {model} no está habilitado para la API.")
-    if not text or not text.strip():
-        raise HTTPException(400, "Falta el texto.")
-
+    started_at = time.perf_counter()
+    slot_meta = None
+    error = None
+    call = {
+        "id": usage.new_request_id(),
+        "type": "clone",
+        "model": model,
+        "text_chars": len(text or ""),
+        "ref_text_chars": len(ref_text or ""),
+        "upload_filename": ref_audio.filename,
+        "upload_mb": 0,
+        "output_bytes": 0,
+    }
     suffix = os.path.splitext(ref_audio.filename or "")[1] or ".wav"
     tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
     try:
-        tmp.write(_read_capped(ref_audio))
+        backend = BACKENDS.get(model)
+        if backend is None:
+            raise HTTPException(404, f"Modelo desconocido: {model}")
+        if not backend.capabilities.get("clone"):
+            raise HTTPException(400, f"{model} no soporta clonaci?n.")
+        if not backend.is_downloaded():
+            raise HTTPException(409, f"El modelo {model} no est? descargado.")
+        if not state.is_enabled(model):
+            raise HTTPException(403, f"El modelo {model} no est? habilitado para la API.")
+        if not text or not text.strip():
+            raise HTTPException(400, "Falta el texto.")
+
+        data = _read_capped(ref_audio)
+        call["upload_mb"] = _mb(len(data))
+        tmp.write(data)
         tmp.close()
         opts = {"ref_audio": tmp.name}
         if backend.capabilities.get("ref_text") and ref_text:
             opts["ref_text"] = ref_text
-        with inference.slot():
+        with inference.slot() as slot_meta:
             path = backend.synthesize(text, **opts)
-    except HTTPException:
+        wav = _read_wav_and_cleanup(path)
+        call["output_bytes"] = len(wav)
+        return Response(content=wav, media_type="audio/wav")
+    except HTTPException as e:
+        error = e
         raise
     except Exception as e:
-        raise HTTPException(500, f"Error de clonación: {e}")
+        error = HTTPException(500, f"Error de clonaci?n: {e}")
+        raise error
     finally:
         try:
             os.remove(tmp.name)
         except OSError:
             pass
-    return _wav_response_and_cleanup(path)
+        _record_call(call, started_at, slot_meta, error)
 
 
 @app.post("/api/transcribe", dependencies=[Depends(_require_token)])
 def transcribe(audio: UploadFile = File(...), language: str = Form(None),
                model: str = Form("Whisper")):
     """Transcribe un audio (cualquier formato). El audio se procesa y se borra."""
-    tr = TRANSCRIBERS.get(model)
-    if tr is None:
-        raise HTTPException(404, f"Transcriptor desconocido: {model}")
-    if not tr.is_downloaded():
-        raise HTTPException(409, f"{model} no está descargado.")
-    if not state.is_enabled(model):
-        raise HTTPException(403, f"{model} no está habilitado para la API.")
-
+    started_at = time.perf_counter()
+    slot_meta = None
+    error = None
+    call = {
+        "id": usage.new_request_id(),
+        "type": "transcribe",
+        "model": model,
+        "lang": language,
+        "upload_filename": audio.filename,
+        "upload_mb": 0,
+        "text_chars": 0,
+    }
     suffix = os.path.splitext(audio.filename or "")[1] or ".wav"
     tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
     try:
-        tmp.write(_read_capped(audio))
+        tr = TRANSCRIBERS.get(model)
+        if tr is None:
+            raise HTTPException(404, f"Transcriptor desconocido: {model}")
+        if not tr.is_downloaded():
+            raise HTTPException(409, f"{model} no est? descargado.")
+        if not state.is_enabled(model):
+            raise HTTPException(403, f"{model} no est? habilitado para la API.")
+
+        data = _read_capped(audio)
+        call["upload_mb"] = _mb(len(data))
+        tmp.write(data)
         tmp.close()
-        with inference.slot():
-            return tr.transcribe(tmp.name, language=language)
-    except HTTPException:
+        with inference.slot() as slot_meta:
+            result = tr.transcribe(tmp.name, language=language)
+        call["text_chars"] = len((result or {}).get("text") or "")
+        return result
+    except HTTPException as e:
+        error = e
         raise
     except Exception as e:
-        raise HTTPException(500, f"Error de transcripción: {e}")
+        error = HTTPException(500, f"Error de transcripci?n: {e}")
+        raise error
     finally:
         try:
             os.remove(tmp.name)
         except OSError:
             pass
+        _record_call(call, started_at, slot_meta, error)
 
 
 # Panel Gradio montado en la raíz. Con credenciales, exige login.

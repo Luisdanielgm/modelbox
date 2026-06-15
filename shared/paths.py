@@ -23,6 +23,7 @@ def _join(base: str, *parts: str) -> str:
 
 if DATA_DIR:
     STATE_DIR = _join(DATA_DIR, "state")
+    LOGS_DIR = _join(DATA_DIR, "logs")
     OUTPUTS = _join(DATA_DIR, "outputs")
     SUPERTONIC_DIR = _join(DATA_DIR, "supertonic")
     POCKET_WEIGHTS = _join(DATA_DIR, "pocket-weights", "model.safetensors")
@@ -39,10 +40,11 @@ if DATA_DIR:
         os.environ["XDG_CACHE_HOME"] = _desired_xdg
 else:
     STATE_DIR = os.environ.get("MODELBOX_STATE_DIR") or os.path.join(ROOT, ".state")
+    LOGS_DIR = os.environ.get("MODELBOX_LOGS_DIR") or os.path.join(ROOT, ".logs")
     OUTPUTS = os.path.join(ROOT, "outputs")
     SUPERTONIC_DIR = os.path.join(ROOT, "models", "supertonic", "assets")
     POCKET_WEIGHTS = os.path.join(ROOT, "models", "pockettts", "weights", "model.safetensors")
 
-for path in (STATE_DIR, OUTPUTS, SUPERTONIC_DIR, os.path.dirname(POCKET_WEIGHTS), os.environ.get("HF_HOME"), os.environ.get("XDG_CACHE_HOME")):
+for path in (STATE_DIR, LOGS_DIR, OUTPUTS, SUPERTONIC_DIR, os.path.dirname(POCKET_WEIGHTS), os.environ.get("HF_HOME"), os.environ.get("XDG_CACHE_HOME")):
     if path:
         os.makedirs(path, exist_ok=True)

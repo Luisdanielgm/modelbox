@@ -164,6 +164,9 @@ Un modelo se puede consumir por API si está **descargado** y **habilitado** (el
 toggle "Habilitar en la API" del panel). El audio se devuelve en la respuesta —
 no se guarda en el servidor.
 
+**Precio actual:** USD 0 durante el periodo inicial de prueba. Consultar
+`/api/pricing` para leer el precio vigente.
+
 ```bash
 # Listar modelos y su estado
 curl -H "Authorization: Bearer $API_TOKEN" http://localhost:7860/api/models
@@ -174,11 +177,19 @@ curl -X POST http://localhost:7860/api/tts \
   -H "Content-Type: application/json" \
   -d '{"model":"Supertonic-3","text":"Hola mundo","voice":"F1","lang":"es"}' \
   --output salida.wav
+
+# Leer registro/resumen de uso
+curl -H "Authorization: Bearer $API_TOKEN" \
+  "http://localhost:7860/api/usage?limit=100"
 ```
 
 `GET /api/health` queda abierto (sin token) para chequeos de estado. Docs
 interactivas en `/api/docs`. **Guía completa de la API:** [docs/API.md](docs/API.md).
 Para agentes/automatizaciones: `/api/agent-guide` y `/api/openapi.json`.
+
+El registro de llamadas vive en el volumen persistente (`/modelbox-data/logs/calls.jsonl`)
+y guarda métricas, no contenido crudo: tipo de llamada, modelo, caracteres, tamaño
+de subida, duración, espera de cola, concurrencia observada, estado HTTP y error.
 
 ### Modelos por separado (CLI)
 
@@ -306,6 +317,7 @@ Dokploy construye la imagen en el propio servidor desde el repositorio Git
    - `/modelbox-data/hf` -> cache de Hugging Face (Pocket-TTS, Qwen y Whisper).
    - `/modelbox-data/cache` -> cache generica de librerias.
    - `/modelbox-data/state` -> estado (modelos descargados / habilitados para la API).
+   - `/modelbox-data/logs` -> registro persistente de llamadas API.
    - `/modelbox-data/supertonic` -> pesos de Supertonic-3.
    - `/modelbox-data/outputs` -> audios generados.
    - `/modelbox-data/pocket-weights/model.safetensors` -> pesos gated de Pocket-TTS para
