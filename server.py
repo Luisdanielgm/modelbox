@@ -16,6 +16,7 @@ de cualquiera que clone el repo). Con ellas: panel con login + API encendida.
 Correr:  uvicorn server:app --host 0.0.0.0 --port 7860   (o: python server.py)
 """
 import os
+from pathlib import Path
 import secrets
 import tempfile
 
@@ -67,6 +68,7 @@ def _read_capped(upload: UploadFile) -> bytes:
 
 
 app = FastAPI(title="Modelbox API", docs_url="/api/docs", openapi_url="/api/openapi.json")
+AGENT_GUIDE = Path(__file__).parent / "docs" / "AGENT_INTEGRATION.md"
 
 
 class TTSRequest(BaseModel):
@@ -81,6 +83,13 @@ class TTSRequest(BaseModel):
 def _model_info(name, backend) -> dict:
     return {"name": name, "downloaded": backend.is_downloaded(),
             "enabled": state.is_enabled(name)}
+
+
+@app.get("/api/agent-guide")
+def agent_guide():
+    """Public, token-free integration guide for automation agents."""
+    return Response(content=AGENT_GUIDE.read_text(encoding="utf-8"),
+                    media_type="text/markdown; charset=utf-8")
 
 
 @app.get("/api/health")

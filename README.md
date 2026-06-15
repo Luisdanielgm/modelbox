@@ -178,6 +178,7 @@ curl -X POST http://localhost:7860/api/tts \
 
 `GET /api/health` queda abierto (sin token) para chequeos de estado. Docs
 interactivas en `/api/docs`. **Guía completa de la API:** [docs/API.md](docs/API.md).
+Para agentes/automatizaciones: `/api/agent-guide` y `/api/openapi.json`.
 
 ### Modelos por separado (CLI)
 
