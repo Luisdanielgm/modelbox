@@ -85,7 +85,7 @@ def generate(model_name, text, voice, lang, speed, steps, ref_audio, ref_text):
             for s, chunk in backend.synthesize_stream(text, **opts):
                 sr = s
                 if not preroll:
-                    preroll, block = int(2.0 * sr), int(0.7 * sr)
+                    preroll, block = int(3.0 * sr), int(6.0 * sr)
                 acc.append(chunk)
                 acc_len += len(chunk)
                 if acc_len >= (block if started else preroll):
