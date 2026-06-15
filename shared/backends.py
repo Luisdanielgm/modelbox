@@ -206,6 +206,25 @@ class PocketBackend(Backend):
         sf.write(out, _peak_normalize(audio), self._model.sample_rate)
         return out
 
+    def synthesize_stream(self, text, voice="alba", ref_audio=None, max_tokens=200, **_):
+        """Generador: produce (sample_rate, chunk_float32) a medida que se genera.
+        Al terminar, guarda el WAV completo (normalizado) en outputs/."""
+        import numpy as np
+        import soundfile as sf
+        self._ensure_loaded()
+        conditioning = ref_audio if ref_audio else voice
+        state = self._model.get_state_for_audio_prompt(conditioning)
+        sr = self._model.sample_rate
+        chunks = []
+        for chunk in self._model.generate_audio_stream(state, text, max_tokens=int(max_tokens)):
+            arr = chunk.detach().cpu().numpy().astype("float32")
+            chunks.append(arr)
+            yield sr, arr
+        if chunks:
+            full = _peak_normalize(np.concatenate(chunks))
+            out = os.path.join(OUTPUTS, f"pocket_{int(time.time())}.wav")
+            sf.write(out, full, sr)
+
 
 # Registro de backends disponibles. Agregar un modelo = una línea aquí.
 BACKENDS = {b.name: b for b in (SupertonicBackend(), PocketBackend(), QwenBackend())}
