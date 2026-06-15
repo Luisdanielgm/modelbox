@@ -10,13 +10,10 @@ import os
 import threading
 import time
 
+from shared.paths import OUTPUTS, STATE_DIR
+
 logger = logging.getLogger(__name__)
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# En Docker se monta un volumen acá (MODELBOX_STATE_DIR=/data/state). En local,
-# por defecto queda dentro del repo (ignorado por git).
-STATE_DIR = os.environ.get("MODELBOX_STATE_DIR") or os.path.join(ROOT, ".state")
-OUTPUTS = os.path.join(ROOT, "outputs")
 _ENABLED_FILE = os.path.join(STATE_DIR, "enabled.json")
 _KEEP_OUTPUTS = 20    # audios a conservar en outputs/; el resto se borra.
 _MIN_AGE_SECS = 60    # nunca borrar audios más nuevos que esto (evita pisar uno en uso).

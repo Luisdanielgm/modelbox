@@ -6,16 +6,14 @@ FROM python:3.11-slim
 #   - solo "supertonic"        -> imagen liviana, SIN torch
 #   - "supertonic,whisper"     -> agrega STT (faster-whisper), SIN torch
 #   - "supertonic,pocket"      -> agrega torch (CPU)
-#   - "...,qwen"               -> agrega transformers + ffmpeg
+#   - "...,qwen"               -> agrega transformers
 ARG MODELS="supertonic,pocket,qwen,whisper"
 
-# Dependencias de sistema: libsndfile (soundfile) siempre; ffmpeg SOLO si se
-# incluye un modelo que clona desde audio mp3/ogg (qwen). ffmpeg pesa ~450 MB.
+# Dependencias de sistema: libsndfile (soundfile) y ffmpeg/ffprobe.
+# Aunque Qwen es el caso mas obvio, Gradio/audio puede invocar ffprobe tambien
+# al servir o procesar WAVs generados por Supertonic/Pocket.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libsndfile1 \
-    && if echo ",$MODELS," | grep -q ",qwen,"; then \
-         apt-get install -y --no-install-recommends ffmpeg; \
-       fi \
+    && apt-get install -y --no-install-recommends libsndfile1 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -47,11 +45,11 @@ RUN if echo ",$MODELS," | grep -qE ",(pocket|qwen),"; then \
 # Código de la app.
 COPY . .
 
-# HF_HOME: caché de modelos (volumen). MODELBOX_STATE_DIR: estado persistente.
+# MODELBOX_DATA_DIR: un unico volumen persistente. Adentro quedan HF cache,
+# estado, pesos de Supertonic, audios y pesos gated de Pocket.
 # MODELBOX_MODELS: el set elegido en build; la app oculta los modelos que no
-# están incluidos en esta imagen (sus librerías no se instalaron).
-ENV HF_HOME=/data/hf \
-    MODELBOX_STATE_DIR=/data/state \
+# estan incluidos en esta imagen (sus librerias no se instalaron).
+ENV MODELBOX_DATA_DIR=/modelbox-data \
     MODELBOX_MODELS=$MODELS
 
 EXPOSE 7860

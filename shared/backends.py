@@ -9,12 +9,11 @@ import os
 import uuid
 
 from shared import state
+from shared.paths import OUTPUTS, POCKET_WEIGHTS, SUPERTONIC_DIR
 
 logger = logging.getLogger(__name__)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUTPUTS = os.path.join(ROOT, "outputs")
-os.makedirs(OUTPUTS, exist_ok=True)
 
 
 def _peak_normalize(x, target=0.95):
@@ -78,8 +77,8 @@ class SupertonicBackend(Backend):
     def download(self):
         logger.info("Descargando modelo: %s…", self.name)
         from supertonic import TTS
-        model_dir = os.path.join(ROOT, "models", "supertonic", "assets")
-        TTS(model="supertonic-3", model_dir=model_dir, auto_download=True)
+        os.makedirs(SUPERTONIC_DIR, exist_ok=True)
+        TTS(model="supertonic-3", model_dir=SUPERTONIC_DIR, auto_download=True)
         state.mark_downloaded(self.name)
 
     def _ensure_loaded(self):
@@ -87,8 +86,7 @@ class SupertonicBackend(Backend):
             raise RuntimeError(f"{self.name} no está descargado. Descargalo desde el panel.")
         if self._model is None:
             from supertonic import TTS
-            model_dir = os.path.join(ROOT, "models", "supertonic", "assets")
-            self._model = TTS(model="supertonic-3", model_dir=model_dir, auto_download=False)
+            self._model = TTS(model="supertonic-3", model_dir=SUPERTONIC_DIR, auto_download=False)
 
     def synthesize(self, text, voice="M1", lang="es", speed=1.05, steps=8, **_):
         self._ensure_loaded()
@@ -198,8 +196,8 @@ class PocketBackend(Backend):
     key = "pocket"
     # Pesos gated de clonación (los baja el usuario con su login HF). Si existen,
     # la clonación se habilita sola; si no, queda en modo solo-presets.
-    _DIR = os.path.join(ROOT, "models", "pockettts")
-    _CLONE_WEIGHTS = os.path.join(_DIR, "weights", "model.safetensors")
+    _DIR = os.path.join(ROOT, "models", "pockettts")   # template clone_spanish.yaml (en la imagen)
+    _CLONE_WEIGHTS = POCKET_WEIGHTS                      # pesos gated (en el volumen de datos)
     _PRESETS = ["alba", "cosette", "marius", "javert", "jean", "anna", "vera",
                 "fantine", "charles", "paul", "eponine", "azelma", "george",
                 "mary", "jane", "michael", "eve", "giovanni", "lola", "juergen",

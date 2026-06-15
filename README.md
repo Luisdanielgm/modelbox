@@ -67,6 +67,7 @@ modelo activo. **Concurrencia:** en CPU las inferencias se serializan en una col
 │  ├─ backends.py         # adaptadores TTS + capacidades
 │  ├─ transcribe.py       # backend STT (Whisper / faster-whisper)
 │  ├─ state.py            # descargas/habilitados + limpieza de audios
+│  ├─ paths.py            # rutas persistentes: local vs volumen unico /modelbox-data
 │  ├─ inference.py        # cola de concurrencia
 │  └─ monitor.py          # monitor de CPU/RAM/almacenamiento (psutil)
 ├─ models/                # supertonic/ · pockettts/ · qwen3/ · whisper/
@@ -154,6 +155,7 @@ Variables operativas (opcionales, con default):
 | `MODELBOX_MAX_CONCURRENT` | `1` | Inferencias en paralelo (en CPU, 1 ya usa todos los cores). |
 | `MODELBOX_WHISPER_SIZE` | `small` | Tamaño de Whisper: `small`/`medium`/`large-v3`. |
 | `MODELBOX_MAX_UPLOAD_MB` | `25` | Tope de tamaño para audios subidos por API. |
+| `MODELBOX_DATA_DIR` | *(vacio local, `/modelbox-data` en Docker)* | Directorio persistente unico. |
 
 ### API REST
 
@@ -213,7 +215,11 @@ defecto se descarga la variante de solo-presets. Para habilitar la clonación:
 2. Descargar el `model.safetensors` del idioma deseado (p. ej. español:
    `languages/spanish/model.safetensors`) y guardarlo en:
    ```
+   # Local, sin Docker
    models/pockettts/weights/model.safetensors
+
+   # Docker/Dokploy, dentro del volumen unico montado en /modelbox-data
+   /modelbox-data/pocket-weights/model.safetensors
    ```
    (Alternativa: `hf auth login` y permitir que se descargue solo.)
 
@@ -242,9 +248,10 @@ La imagen corre en **CPU** (sirve en un VPS sin GPU).
 
 ### Elegir qué modelos incluir (imagen liviana)
 
-El build arg `MODELS` decide qué modelos (y por ende qué librerías) entran en la
-imagen. Solo se instala lo necesario — p. ej. **torch (~742 MB) solo si se incluye
-Pocket o Qwen**, y **ffmpeg (~450 MB) solo si se incluye Qwen**:
+El build arg `MODELS` decide que modelos (y por ende que librerias) entran en la
+imagen. Solo se instala lo necesario: **torch (~742 MB) solo si se incluye
+Pocket o Qwen**. `ffmpeg/ffprobe` se instala siempre porque la capa de audio
+(Gradio/STT/TTS) puede necesitarlo incluso sin Qwen:
 
 ```bash
 # Imagen mínima, sin torch (~0.7 GB)
@@ -268,8 +275,9 @@ cp .env.example .env       # opcional: configurar credenciales (compose lo lee s
 docker compose up -d --build
 ```
 
-Acceder a `http://localhost:7860`. Los audios quedan en `./outputs/`. Para apagar:
-`docker compose down` (los modelos descargados sobreviven en los volúmenes).
+Acceder a `http://localhost:7860`. Todo lo persistente queda en el volumen Docker
+`modelbox-data` montado en `/modelbox-data`. Para apagar: `docker compose down` (los
+modelos descargados sobreviven en ese volumen unico).
 
 > El `.env` es opcional: sin él, el panel queda abierto y la API apagada (los
 > defaults del compose alcanzan para probar). `.env.example` lista todas las
@@ -289,12 +297,16 @@ Dokploy construye la imagen en el propio servidor desde el repositorio Git
 5. **Environment** → configurar las credenciales (ver tabla de Seguridad arriba):
    - `PANEL_USER`, `PANEL_PASSWORD` → login del panel.
    - `API_TOKEN` → token de la API.
-6. **Volumes / Mounts** (importante, para no re-descargar varios GB en cada
-   redeploy):
-   - `/data/hf` → caché de Hugging Face (Pocket-TTS y Qwen).
-   - `/data/state` → estado (modelos descargados / habilitados para la API).
-   - `/app/models/supertonic/assets` → pesos de Supertonic-3.
-   - `/app/outputs` → audios generados.
+6. **Volumes / Mounts** (importante): crear **un solo volumen** montado en
+   `/modelbox-data`. Si preferis otro path interno, tambien se puede cambiando
+   `MODELBOX_DATA_DIR`, pero este default evita confusiones con otros servicios.
+   Modelbox organiza internamente:
+   - `/modelbox-data/hf` -> cache de Hugging Face (Pocket-TTS, Qwen y Whisper).
+   - `/modelbox-data/state` -> estado (modelos descargados / habilitados para la API).
+   - `/modelbox-data/supertonic` -> pesos de Supertonic-3.
+   - `/modelbox-data/outputs` -> audios generados.
+   - `/modelbox-data/pocket-weights/model.safetensors` -> pesos gated de Pocket-TTS para
+     clonacion (opcional).
 7. **Deploy.** En cada push, Dokploy reconstruye desde el repositorio.
 
 > **RAM:** un VPS de 4 GB alcanza para Supertonic y Pocket-TTS. **Qwen3-TTS

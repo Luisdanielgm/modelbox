@@ -11,6 +11,7 @@ import gradio as gr
 
 from shared import inference, monitor, state
 from shared.backends import BACKENDS
+from shared.paths import OUTPUTS
 from shared.transcribe import TRANSCRIBERS
 
 
@@ -29,9 +30,6 @@ class _DropContentLengthError(logging.Filter):
 
 
 logging.getLogger("uvicorn.error").addFilter(_DropContentLengthError())
-
-OUTPUTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
-os.makedirs(OUTPUTS, exist_ok=True)
 
 MODEL_NAMES = list(BACKENDS.keys())
 DEFAULT_MODEL = MODEL_NAMES[0] if MODEL_NAMES else None
@@ -178,6 +176,16 @@ def do_download_whisper():
 def set_enable_whisper(value):
     state.set_enabled(WHISPER_NAME, bool(value))
     return _tr_status_md()
+
+
+def on_whisper_load():
+    dl = WHISPER.is_downloaded()
+    return (
+        _tr_status_md(),
+        gr.update(visible=not dl),
+        gr.update(value=state.is_enabled(WHISPER_NAME)),
+        gr.update(interactive=dl),
+    )
 
 
 def transcribe(audio_path, language):
@@ -339,9 +347,10 @@ with gr.Blocks(title="Modelbox") as demo:
             timer = gr.Timer(1.5)
 
     if MODEL_NAMES:
-        model_dd.change(on_model_change, inputs=model_dd,
-                        outputs=[voice_dd, lang_dd, speed_sl, steps_sl, ref_audio_in, ref_text_in,
-                                 model_status, download_btn, enable_cb, gen_btn])
+        tts_state_outputs = [voice_dd, lang_dd, speed_sl, steps_sl, ref_audio_in, ref_text_in,
+                             model_status, download_btn, enable_cb, gen_btn]
+        demo.load(on_model_change, inputs=model_dd, outputs=tts_state_outputs)
+        model_dd.change(on_model_change, inputs=model_dd, outputs=tts_state_outputs)
         download_btn.click(do_download, inputs=model_dd,
                            outputs=[model_status, download_btn, gen_btn, status])
         enable_cb.change(set_enable, inputs=[model_dd, enable_cb], outputs=model_status)
@@ -351,6 +360,8 @@ with gr.Blocks(title="Modelbox") as demo:
                       outputs=[audio_out, status])
 
     if WHISPER:
+        demo.load(on_whisper_load,
+                  outputs=[tr_status, tr_download_btn, tr_enable_cb, tr_btn])
         tr_download_btn.click(do_download_whisper,
                               outputs=[tr_status, tr_download_btn, tr_btn, tr_msg])
         tr_enable_cb.change(set_enable_whisper, inputs=tr_enable_cb, outputs=tr_status)
