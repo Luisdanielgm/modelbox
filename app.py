@@ -53,9 +53,15 @@ def _friendly_error(e):
 
 def _status_md(model_name):
     backend = BACKENDS[model_name]
-    dl = "✅ descargado" if backend.is_downloaded() else "⬇️ no descargado"
-    en = "🔓 habilitado en API" if state.is_enabled(model_name) else "🔒 deshabilitado en API"
-    return f"**Estado:** {dl} · {en}"
+    dl = "descargado" if backend.is_downloaded() else "no descargado"
+    en = "habilitado en API" if state.is_enabled(model_name) else "deshabilitado en API"
+    parts = [f"**Estado:** {dl} - {en}"]
+    if getattr(backend, "key", None) == "pocket":
+        if backend.capabilities.get("clone"):
+            parts.append("**Clonacion Pocket:** disponible en la interfaz y API.")
+        else:
+            parts.append("**Clonacion Pocket:** falta `/modelbox-data/pocket-weights/model.safetensors`.")
+    return "\n\n".join(parts)
 
 
 def on_model_change(model_name):
@@ -64,6 +70,7 @@ def on_model_change(model_name):
     presets = caps["presets"]
     langs = caps["languages"]
     dl = backend.is_downloaded()
+    show_clone_input = caps["clone"] or getattr(backend, "key", None) == "pocket"
     return (
         gr.update(choices=presets, value=presets[0] if presets else None,
                   visible=bool(presets)),
@@ -71,12 +78,14 @@ def on_model_change(model_name):
                   visible=bool(langs)),
         gr.update(visible=caps["has_speed"]),
         gr.update(visible=caps["has_steps"]),
-        gr.update(visible=caps["clone"]),
-        gr.update(visible=caps["ref_text"]),
+        gr.update(value=None, visible=show_clone_input),
+        gr.update(value="", visible=caps["ref_text"]),
         _status_md(model_name),
         gr.update(visible=not dl),          # download_btn
         gr.update(value=state.is_enabled(model_name)),  # enable_cb
-        gr.update(interactive=dl),          # gen_btn: solo si está descargado
+        gr.update(interactive=dl),          # gen_btn: solo si est? descargado
+        None,                               # audio_out: clear previous model result
+        "",                                 # status: clear previous model message
     )
 
 
@@ -112,6 +121,9 @@ def generate(model_name, text, voice, lang, speed, steps, ref_audio, ref_text):
         opts["speed"] = speed
     if caps["has_steps"]:
         opts["steps"] = steps
+    if getattr(backend, "key", None) == "pocket" and ref_audio and not caps["clone"]:
+        yield None, "La clonacion de Pocket requiere /modelbox-data/pocket-weights/model.safetensors."
+        return
     if caps["clone"]:
         opts["ref_audio"] = ref_audio
     if caps["ref_text"]:
@@ -308,9 +320,12 @@ with gr.Blocks(title="Modelbox") as demo:
                                              visible=init_caps["has_speed"])
                         steps_sl = gr.Slider(1, 32, value=8, step=1, label="Pasos (calidad/velocidad)",
                                              visible=init_caps["has_steps"])
-                        ref_audio_in = gr.Audio(sources=["microphone", "upload"], type="filepath",
-                                                label="Audio de referencia (clonación)",
-                                                visible=init_caps["clone"])
+                        ref_audio_in = gr.Audio(
+                            sources=["microphone", "upload"],
+                            type="filepath",
+                            label="Audio de referencia (clonacion)",
+                            visible=(init_caps["clone"] or getattr(BACKENDS[DEFAULT_MODEL], "key", None) == "pocket"),
+                        )
                         ref_text_in = gr.Textbox(label="Texto del audio de referencia (opcional)",
                                                  visible=init_caps["ref_text"])
                         gen_btn = gr.Button("Generar", variant="primary",
@@ -348,7 +363,7 @@ with gr.Blocks(title="Modelbox") as demo:
 
     if MODEL_NAMES:
         tts_state_outputs = [voice_dd, lang_dd, speed_sl, steps_sl, ref_audio_in, ref_text_in,
-                             model_status, download_btn, enable_cb, gen_btn]
+                             model_status, download_btn, enable_cb, gen_btn, audio_out, status]
         demo.load(on_model_change, inputs=model_dd, outputs=tts_state_outputs)
         model_dd.change(on_model_change, inputs=model_dd, outputs=tts_state_outputs)
         download_btn.click(do_download, inputs=model_dd,
