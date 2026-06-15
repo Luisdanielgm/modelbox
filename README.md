@@ -229,11 +229,16 @@ incluidos en el build.
 ### Local (probar en tu máquina)
 
 ```bash
+cp .env.example .env       # opcional: configurá credenciales (compose lo lee solo)
 docker compose up -d --build
 ```
 
 Abrí `http://localhost:7860`. Los audios quedan en `./outputs/`. Para apagar:
 `docker compose down` (los modelos descargados sobreviven en los volúmenes).
+
+> El `.env` es opcional: sin él, el panel queda abierto y la API apagada (los
+> defaults del compose alcanzan para probar). `.env.example` lista todas las
+> variables configurables.
 
 ### En un VPS con Dokploy
 

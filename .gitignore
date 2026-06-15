@@ -4,6 +4,9 @@ venv/
 __pycache__/
 *.py[cod]
 
+# Variables de entorno reales (secretos). El ejemplo SÍ se versiona (.env.example).
+.env
+
 # Caché de Hugging Face / modelos descargados (se bajan solos)
 .cache/
 models/supertonic/assets/
