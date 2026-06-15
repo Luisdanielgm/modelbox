@@ -8,6 +8,34 @@ tu máquina, sin llamadas a la nube.
 > **Arquitectura:** `models/` + backends por capacidad. Agregar un modelo (o un
 > nuevo tipo, como LLMs de texto) no requiere reescribir la interfaz.
 
+## Inicio rápido
+
+**Con Docker (lo más rápido):**
+
+```bash
+git clone <URL-del-repo> && cd modelbox
+cp .env.example .env          # opcional: credenciales y config (compose lo lee solo)
+docker compose up -d --build
+```
+
+Abrí <http://localhost:7860>, elegí un modelo, apretá **Descargar** y generá.
+Detalle y opciones en [Docker / Despliegue](#docker--despliegue).
+
+**Sin Docker (Python 3.10+):**
+
+```bash
+git clone <URL-del-repo> && cd modelbox
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
+pip install -r requirements.txt -r models/supertonic/requirements.txt
+python server.py
+```
+
+Abrí <http://127.0.0.1:7860>. Instalá los requirements de cada modelo que quieras
+usar (ver [Instalación](#instalación-desde-cero)).
+
+**En un VPS:** [Dokploy](#en-un-vps-con-dokploy) construye la imagen en tu propio
+servidor desde el repo (sin Docker Hub).
+
 ## Modelos incluidos
 
 | Modelo        | Tipo | Runtime          | RAM aprox.   | Clonación / Notas            |
@@ -31,15 +59,19 @@ modelo activo. **Concurrencia:** en CPU las inferencias se serializan en una col
 
 ```
 .
-├─ app.py                 # interfaz unificada (Gradio)
-├─ requirements.txt       # dependencias de la app (gradio, psutil)
+├─ server.py              # entrypoint: API (FastAPI) + panel Gradio montado
+├─ app.py                 # panel Gradio (pestañas TTS / Transcribir / API)
+├─ requirements.txt       # deps de la app (gradio, fastapi, uvicorn, psutil…)
+├─ Dockerfile · docker-compose.yml · .env.example
 ├─ shared/
-│  ├─ backends.py         # adaptadores por modelo + capacidades
+│  ├─ backends.py         # adaptadores TTS + capacidades
+│  ├─ transcribe.py       # backend STT (Whisper / faster-whisper)
+│  ├─ state.py            # descargas/habilitados + limpieza de audios
+│  ├─ inference.py        # cola de concurrencia
 │  └─ monitor.py          # monitor de CPU/RAM/almacenamiento (psutil)
-├─ models/
-│  ├─ qwen3/              # run.py · requirements.txt
-│  ├─ pockettts/          # run.py · requirements.txt
-│  └─ supertonic/         # run.py · requirements.txt
+├─ models/                # supertonic/ · pockettts/ · qwen3/ · whisper/
+│  └─ <modelo>/           #   run.py · requirements.txt
+├─ docs/API.md            # guía completa de la API
 └─ outputs/               # audios generados (se crea solo)
 ```
 
@@ -61,9 +93,11 @@ uv venv                       # crea .venv
 #   Linux / macOS:         source .venv/bin/activate
 
 # 4) Instalar dependencias de la app + del/los modelo(s) que quieras usar
-uv pip install -r requirements.txt
-uv pip install -r models/supertonic/requirements.txt   # para Supertonic
-uv pip install -r models/qwen3/requirements.txt        # para Qwen
+uv pip install -r requirements.txt                     # app (gradio + API)
+uv pip install -r models/supertonic/requirements.txt   # Supertonic (TTS, sin torch)
+uv pip install -r models/pockettts/requirements.txt    # Pocket-TTS (TTS, clonación)
+uv pip install -r models/whisper/requirements.txt      # Whisper (STT, sin torch)
+uv pip install -r models/qwen3/requirements.txt        # Qwen (TTS pesado, opcional)
 #   (con pip estándar, reemplazá "uv pip" por "pip")
 ```
 
