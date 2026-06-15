@@ -53,8 +53,7 @@ def on_model_change(model_name):
 
 def generate(model_name, text, voice, lang, speed, steps, ref_audio, ref_text):
     if not text or not text.strip():
-        yield None, "Escribí algo de texto primero."
-        return
+        return None, "Escribí algo de texto primero."
     backend = BACKENDS[model_name]
     caps = backend.capabilities
     opts = {}
@@ -71,18 +70,10 @@ def generate(model_name, text, voice, lang, speed, steps, ref_audio, ref_text):
     if caps["ref_text"]:
         opts["ref_text"] = ref_text or None
     try:
-        # Modelos con streaming (Pocket): reproducen a medida que generan.
-        if hasattr(backend, "synthesize_stream"):
-            for sr, chunk in backend.synthesize_stream(text, **opts):
-                yield (sr, chunk), "Generando…"
-            yield gr.update(), "Listo"
-        else:
-            import soundfile as sf
-            path = backend.synthesize(text, **opts)
-            data, sr = sf.read(path, dtype="float32")
-            yield (sr, data), f"Listo: {os.path.basename(path)}"
+        path = backend.synthesize(text, **opts)
     except Exception as e:
-        yield None, f"Error: {e}"
+        return None, f"Error: {e}"
+    return path, f"Listo: {os.path.basename(path)}"
 
 
 def refresh_monitor():
@@ -118,7 +109,7 @@ with gr.Blocks(title="TTS Multi-Modelo") as demo:
             status = gr.Markdown("")
 
         with gr.Column(scale=2):
-            audio_out = gr.Audio(label="Resultado", streaming=True, autoplay=True)
+            audio_out = gr.Audio(label="Resultado", type="filepath")
             gr.Markdown("### Recursos")
             mon_md = gr.Markdown(refresh_monitor())
             timer = gr.Timer(1.5)
