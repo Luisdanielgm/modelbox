@@ -75,8 +75,24 @@ def generate(model_name, text, voice, lang, speed, steps, ref_audio, ref_text):
         # se atasca, así que ahí generamos todo y reproducimos al final.
         stream = hasattr(backend, "synthesize_stream") and backend.uses_gpu()
         if stream:
-            for sr, chunk in backend.synthesize_stream(text, **opts):
-                yield (sr, chunk), "Generando…"
+            import numpy as np
+            # Pre-buffer ~2s antes de reproducir y luego mandar bloques de ~0.7s.
+            # Con RTF < 1 (GPU), el colchón inicial evita que el player se vacíe;
+            # bloques grandes reducen los cortes vs. mandar chunks de ~80ms.
+            sr = None
+            acc, acc_len, started = [], 0, False
+            preroll = block = 0
+            for s, chunk in backend.synthesize_stream(text, **opts):
+                sr = s
+                if not preroll:
+                    preroll, block = int(2.0 * sr), int(0.7 * sr)
+                acc.append(chunk)
+                acc_len += len(chunk)
+                if acc_len >= (block if started else preroll):
+                    yield (sr, np.concatenate(acc)), "Generando…"
+                    acc, acc_len, started = [], 0, True
+            if acc:
+                yield (sr, np.concatenate(acc)), "Generando…"
             yield gr.update(), "Listo"
         else:
             import soundfile as sf
