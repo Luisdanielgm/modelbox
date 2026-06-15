@@ -181,8 +181,11 @@ class PocketBackend(Backend):
             f.write(text)
         return resolved
 
+    _device = "cpu"
+
     def _ensure_loaded(self):
         if self._model is None:
+            import torch
             from pocket_tts import TTSModel
             if self._has_clone:
                 self._model = TTSModel.load_model(config=self._resolved_config())
@@ -195,6 +198,16 @@ class PocketBackend(Backend):
                 self._model.origin = CONFIGS_DIR / "spanish.yaml"
             else:
                 self._model = TTSModel.load_model()
+            # Pocket es liviano (~540MB en VRAM): si hay GPU, la usamos. Mucho
+            # más rápido (RTF < 1) y habilita streaming real.
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
+            if self._device == "cuda":
+                self._model.to("cuda")
+
+    def uses_gpu(self):
+        """True si el modelo corre en GPU (suficientemente rápido para streaming)."""
+        self._ensure_loaded()
+        return self._device == "cuda"
 
     def synthesize(self, text, voice="alba", ref_audio=None, max_tokens=200, **_):
         import soundfile as sf
@@ -205,6 +218,24 @@ class PocketBackend(Backend):
         out = os.path.join(OUTPUTS, f"pocket_{int(time.time())}.wav")
         sf.write(out, _peak_normalize(audio), self._model.sample_rate)
         return out
+
+    def synthesize_stream(self, text, voice="alba", ref_audio=None, max_tokens=200, **_):
+        """Generador: produce (sample_rate, chunk_float32) a medida que genera.
+        Solo conviene en GPU (RTF < 1). Al terminar guarda el WAV completo."""
+        import numpy as np
+        import soundfile as sf
+        self._ensure_loaded()
+        conditioning = ref_audio if ref_audio else voice
+        state = self._model.get_state_for_audio_prompt(conditioning)
+        sr = self._model.sample_rate
+        chunks = []
+        for chunk in self._model.generate_audio_stream(state, text, max_tokens=int(max_tokens)):
+            arr = chunk.detach().cpu().numpy().astype("float32")
+            chunks.append(arr)
+            yield sr, arr
+        if chunks:
+            full = _peak_normalize(np.concatenate(chunks))
+            sf.write(os.path.join(OUTPUTS, f"pocket_{int(time.time())}.wav"), full, sr)
 
 
 # Registro de backends disponibles. Agregar un modelo = una línea aquí.
