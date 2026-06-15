@@ -4,10 +4,13 @@ un modelo nuevo = agregar un backend aquí, sin tocar la interfaz.
 
 Cada backend carga su modelo de forma perezosa (solo al primer uso).
 """
+import logging
 import os
 import uuid
 
 from shared import state
+
+logger = logging.getLogger(__name__)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUTS = os.path.join(ROOT, "outputs")
@@ -73,6 +76,7 @@ class SupertonicBackend(Backend):
     }
 
     def download(self):
+        logger.info("Descargando modelo: %s…", self.name)
         from supertonic import TTS
         model_dir = os.path.join(ROOT, "models", "supertonic", "assets")
         TTS(model="supertonic-3", model_dir=model_dir, auto_download=True)
@@ -123,6 +127,7 @@ class QwenBackend(Backend):
         # dispare una autodescarga sorpresa: CustomVoice (presets) + Base (clon).
         for repo in ("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
                      "Qwen/Qwen3-TTS-12Hz-1.7B-Base"):
+            logger.info("Descargando modelo: %s (%s)…", self.name, repo)
             Qwen3TTSModel.from_pretrained(
                 repo, torch_dtype=torch.float32, device_map="cpu", attn_implementation="sdpa",
             )
@@ -138,8 +143,11 @@ class QwenBackend(Backend):
         from qwen_tts import Qwen3TTSModel
         name = ("Qwen/Qwen3-TTS-12Hz-1.7B-Base" if clone
                 else "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice")
+        # local_files_only: cargar usa SOLO la caché; nunca descarga (eso es
+        # exclusivo de download()). Si falta, falla claro en vez de bajar en silencio.
         self._model = Qwen3TTSModel.from_pretrained(
-            name, torch_dtype=torch.float32, device_map="cpu", attn_implementation="sdpa",
+            name, torch_dtype=torch.float32, device_map="cpu",
+            attn_implementation="sdpa", local_files_only=True,
         )
         self._mode = mode
 
@@ -226,8 +234,14 @@ class PocketBackend(Backend):
     _device = "cpu"
 
     def download(self):
+        logger.info("Descargando modelo: %s…", self.name)
         from pocket_tts import TTSModel
-        TTSModel.load_model()  # baja el modelo de presets a la caché de HF (~100M)
+        TTSModel.load_model()  # modelo de presets (~100M) a la caché de HF
+        # Si están los pesos gated de clonación, pre-bajamos también el modelo del
+        # config de clonación para que el PRIMER clon no dispare una descarga sorpresa.
+        if os.path.exists(self._CLONE_WEIGHTS):
+            logger.info("Descargando pesos de clonación de %s…", self.name)
+            TTSModel.load_model(config=self._resolved_config())
         state.mark_downloaded(self.name)
 
     def _ensure_loaded(self):

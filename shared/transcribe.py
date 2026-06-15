@@ -25,6 +25,8 @@ class WhisperTranscriber:
 
     def download(self):
         """Descarga el modelo a la caché de HF y lo marca disponible."""
+        import logging
+        logging.getLogger(__name__).info("Descargando modelo: %s (%s)…", self.name, WHISPER_SIZE)
         from faster_whisper import WhisperModel
         WhisperModel(WHISPER_SIZE, device="cpu", compute_type="int8")
         state.mark_downloaded(self.name)
