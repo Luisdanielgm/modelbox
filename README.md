@@ -70,6 +70,19 @@ uv pip install -r models/qwen3/requirements.txt        # para Qwen
 > (Supertonic ~385 MB; Qwen ~3 GB por modelo). La primera generación de Qwen en
 > CPU puede tardar 1–2 minutos.
 
+### GPU (opcional, recomendado si tenés NVIDIA)
+
+Por defecto se instala PyTorch CPU (sirve en cualquier lado, incluido VPS). Si
+tenés una GPU NVIDIA, instalá el build CUDA para acelerar **Pocket-TTS** (~3x más
+rápido y habilita streaming en vivo). Con ~1 GB de VRAM alcanza:
+
+```bash
+uv pip install --reinstall torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+```
+
+`Pocket-TTS` detecta la GPU y la usa solo. Qwen sigue en CPU (no entra en GPUs
+chicas). El panel de Recursos muestra la VRAM cuando hay GPU.
+
 ## Uso
 
 ### Interfaz unificada (recomendado)
