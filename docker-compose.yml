@@ -1,0 +1,47 @@
+services:
+  modelbox:
+    build:
+      context: .
+      args:
+        # Qué modelos incluir en la imagen. En Dokploy se setea como build arg.
+        # Ej.: "supertonic,pocket,whisper" deja una imagen sin Qwen/transformers.
+        MODELS: ${MODELS:-supertonic,pocket,qwen,whisper}
+    image: modelbox:latest
+    container_name: modelbox
+    ports:
+      - "7860:7860"
+    environment:
+      HF_HOME: /data/hf
+      MODELBOX_STATE_DIR: /data/state
+      # Inferencias en paralelo (en CPU, 1 ya usa todos los cores; el resto va a cola).
+      MODELBOX_MAX_CONCURRENT: ${MODELBOX_MAX_CONCURRENT:-1}
+      # Tamaño de Whisper (small/medium/large-v3). small int8 ≈ 1 GB RAM.
+      MODELBOX_WHISPER_SIZE: ${MODELBOX_WHISPER_SIZE:-small}
+      # Tope de tamaño para audios subidos a /api/clone y /api/transcribe.
+      MODELBOX_MAX_UPLOAD_MB: ${MODELBOX_MAX_UPLOAD_MB:-25}
+      # Configurá estos en Dokploy. Si quedan vacíos: panel abierto + API apagada.
+      PANEL_USER: ${PANEL_USER:-}
+      PANEL_PASSWORD: ${PANEL_PASSWORD:-}
+      API_TOKEN: ${API_TOKEN:-}
+    volumes:
+      # Caché de Hugging Face (Pocket-TTS y Qwen): persiste entre reinicios
+      # para no re-descargar varios GB cada vez que arranca el contenedor.
+      - hf-cache:/data/hf
+      # Estado: qué modelos están descargados y habilitados para la API.
+      - model-state:/data/state
+      # Pesos de Supertonic-3 (se descargan cuando le das "Descargar").
+      - supertonic-assets:/app/models/supertonic/assets
+      # Audios generados (quedan accesibles en el host).
+      - ./outputs:/app/outputs
+      # Pesos gated de clonación de Pocket-TTS: si los bajás, ponelos acá.
+      - ./models/pockettts/weights:/app/models/pockettts/weights
+    restart: unless-stopped
+    # Qwen3-TTS necesita ~9.6 GB de RAM residente. En un VPS chico no lo
+    # selecciones en la interfaz (Supertonic y Pocket corren en ~1 GB).
+    # Descomentá para topar el uso de memoria del contenedor:
+    # mem_limit: 4g
+
+volumes:
+  hf-cache:
+  model-state:
+  supertonic-assets:

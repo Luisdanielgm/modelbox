@@ -5,7 +5,9 @@ un modelo nuevo = agregar un backend aquí, sin tocar la interfaz.
 Cada backend carga su modelo de forma perezosa (solo al primer uso).
 """
 import os
-import time
+import uuid
+
+from shared import state
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUTS = os.path.join(ROOT, "outputs")
@@ -25,6 +27,7 @@ def _peak_normalize(x, target=0.95):
 
 class Backend:
     name = "base"
+    key = "base"   # identificador corto (coincide con el ARG MODELS del Dockerfile)
     capabilities = {
         "clone": False,        # ¿clona voz desde audio de referencia?
         "ref_text": False,     # ¿usa texto del audio de referencia? (solo Qwen)
@@ -37,6 +40,14 @@ class Backend:
     def __init__(self):
         self._model = None
 
+    def is_downloaded(self) -> bool:
+        return state.is_downloaded(self.name)
+
+    def download(self):
+        """Descarga los pesos del modelo (al volumen/caché) y lo marca disponible.
+        Solo se ejecuta cuando el usuario lo pide; nada se baja automáticamente."""
+        raise NotImplementedError
+
     def _ensure_loaded(self):
         raise NotImplementedError
 
@@ -47,6 +58,7 @@ class Backend:
 
 class SupertonicBackend(Backend):
     name = "Supertonic-3"
+    key = "supertonic"
     capabilities = {
         "clone": False,
         "ref_text": False,
@@ -60,11 +72,19 @@ class SupertonicBackend(Backend):
         "has_steps": True,
     }
 
+    def download(self):
+        from supertonic import TTS
+        model_dir = os.path.join(ROOT, "models", "supertonic", "assets")
+        TTS(model="supertonic-3", model_dir=model_dir, auto_download=True)
+        state.mark_downloaded(self.name)
+
     def _ensure_loaded(self):
+        if not self.is_downloaded():
+            raise RuntimeError(f"{self.name} no está descargado. Descargalo desde el panel.")
         if self._model is None:
             from supertonic import TTS
             model_dir = os.path.join(ROOT, "models", "supertonic", "assets")
-            self._model = TTS(model="supertonic-3", model_dir=model_dir, auto_download=True)
+            self._model = TTS(model="supertonic-3", model_dir=model_dir, auto_download=False)
 
     def synthesize(self, text, voice="M1", lang="es", speed=1.05, steps=8, **_):
         self._ensure_loaded()
@@ -73,13 +93,14 @@ class SupertonicBackend(Backend):
             text=text, voice_style=style, lang=lang,
             total_steps=int(steps), speed=float(speed),
         )
-        out = os.path.join(OUTPUTS, f"supertonic_{int(time.time())}.wav")
+        out = os.path.join(OUTPUTS, f"supertonic_{uuid.uuid4().hex}.wav")
         self._model.save_audio(_peak_normalize(wav), out)
         return out
 
 
 class QwenBackend(Backend):
     name = "Qwen3-TTS"
+    key = "qwen"
     capabilities = {
         "clone": True,
         "ref_text": True,
@@ -95,7 +116,21 @@ class QwenBackend(Backend):
         super().__init__()
         self._mode = None  # 'clone' o 'preset' (define qué modelo cargar)
 
+    def download(self):
+        import torch
+        from qwen_tts import Qwen3TTSModel
+        # Bajamos AMBOS modelos para que el marker sea veraz y la clonación NO
+        # dispare una autodescarga sorpresa: CustomVoice (presets) + Base (clon).
+        for repo in ("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+                     "Qwen/Qwen3-TTS-12Hz-1.7B-Base"):
+            Qwen3TTSModel.from_pretrained(
+                repo, torch_dtype=torch.float32, device_map="cpu", attn_implementation="sdpa",
+            )
+        state.mark_downloaded(self.name)
+
     def _ensure_loaded(self, clone: bool):
+        if not self.is_downloaded():
+            raise RuntimeError(f"{self.name} no está descargado. Descargalo desde el panel.")
         mode = "clone" if clone else "preset"
         if self._model is not None and self._mode == mode:
             return
@@ -120,7 +155,7 @@ class QwenBackend(Backend):
         if clone and ref_audio and not ref_audio.lower().endswith(".wav"):
             try:
                 data, sr_in = sf.read(ref_audio)
-                temp_ref = os.path.join(OUTPUTS, f"_tmp_ref_{int(time.time())}.wav")
+                temp_ref = os.path.join(OUTPUTS, f"_tmp_ref_{uuid.uuid4().hex}.wav")
                 sf.write(temp_ref, data, sr_in)
                 ref_path = temp_ref
             except Exception:
@@ -145,49 +180,63 @@ class QwenBackend(Backend):
                 except OSError:
                     pass
 
-        out = os.path.join(OUTPUTS, f"qwen3_{int(time.time())}.wav")
+        out = os.path.join(OUTPUTS, f"qwen3_{uuid.uuid4().hex}.wav")
         sf.write(out, _peak_normalize(wavs[0]), sr)
         return out
 
 
 class PocketBackend(Backend):
     name = "Pocket-TTS"
+    key = "pocket"
     # Pesos gated de clonación (los baja el usuario con su login HF). Si existen,
     # la clonación se habilita sola; si no, queda en modo solo-presets.
     _DIR = os.path.join(ROOT, "models", "pockettts")
     _CLONE_WEIGHTS = os.path.join(_DIR, "weights", "model.safetensors")
-    _has_clone = os.path.exists(_CLONE_WEIGHTS)
+    _PRESETS = ["alba", "cosette", "marius", "javert", "jean", "anna", "vera",
+                "fantine", "charles", "paul", "eponine", "azelma", "george",
+                "mary", "jane", "michael", "eve", "giovanni", "lola", "juergen",
+                "rafael", "estelle"]
 
-    capabilities = {
-        "clone": _has_clone,
-        "ref_text": False,
-        "presets": ["alba", "cosette", "marius", "javert", "jean", "anna", "vera",
-                    "fantine", "charles", "paul", "eponine", "azelma", "george",
-                    "mary", "jane", "michael", "eve", "giovanni", "lola", "juergen",
-                    "rafael", "estelle"],
-        "languages": [],
-        "has_speed": False,
-        "has_steps": False,
-    }
+    @property
+    def capabilities(self):
+        # `clone` se recalcula en runtime: si bajás los pesos gated después de
+        # arrancar el servicio, la clonación se habilita sin reiniciar.
+        return {
+            "clone": os.path.exists(self._CLONE_WEIGHTS),
+            "ref_text": False,
+            "presets": self._PRESETS,
+            "languages": [],
+            "has_speed": False,
+            "has_steps": False,
+        }
 
     def _resolved_config(self):
-        """Genera el yaml de clonación con la ruta absoluta de los pesos locales."""
+        """Genera el yaml de clonación con la ruta absoluta de los pesos locales.
+        Se escribe en un tempdir para no ensuciar el volumen de pesos del usuario."""
+        import tempfile
         template = os.path.join(self._DIR, "clone_spanish.yaml")
         with open(template, encoding="utf-8") as f:
             text = f.read()
         text = text.replace("__LOCAL_CLONE_WEIGHTS__", self._CLONE_WEIGHTS.replace("\\", "/"))
-        resolved = os.path.join(self._DIR, "weights", "_resolved.yaml")
+        resolved = os.path.join(tempfile.gettempdir(), "modelbox_pocket_resolved.yaml")
         with open(resolved, "w", encoding="utf-8") as f:
             f.write(text)
         return resolved
 
     _device = "cpu"
 
+    def download(self):
+        from pocket_tts import TTSModel
+        TTSModel.load_model()  # baja el modelo de presets a la caché de HF (~100M)
+        state.mark_downloaded(self.name)
+
     def _ensure_loaded(self):
+        if not self.is_downloaded():
+            raise RuntimeError(f"{self.name} no está descargado. Descargalo desde el panel.")
         if self._model is None:
             import torch
             from pocket_tts import TTSModel
-            if self._has_clone:
+            if os.path.exists(self._CLONE_WEIGHTS):
                 self._model = TTSModel.load_model(config=self._resolved_config())
                 # Cargar desde un config propio hace que el modelo pierda la
                 # asociación de idioma que las voces preset necesitan. Apuntamos
@@ -213,9 +262,9 @@ class PocketBackend(Backend):
         import soundfile as sf
         self._ensure_loaded()
         conditioning = ref_audio if ref_audio else voice
-        state = self._model.get_state_for_audio_prompt(conditioning)
-        audio = self._model.generate_audio(state, text, max_tokens=int(max_tokens))
-        out = os.path.join(OUTPUTS, f"pocket_{int(time.time())}.wav")
+        audio_state = self._model.get_state_for_audio_prompt(conditioning)
+        audio = self._model.generate_audio(audio_state, text, max_tokens=int(max_tokens))
+        out = os.path.join(OUTPUTS, f"pocket_{uuid.uuid4().hex}.wav")
         sf.write(out, _peak_normalize(audio), self._model.sample_rate)
         return out
 
@@ -226,17 +275,27 @@ class PocketBackend(Backend):
         import soundfile as sf
         self._ensure_loaded()
         conditioning = ref_audio if ref_audio else voice
-        state = self._model.get_state_for_audio_prompt(conditioning)
+        audio_state = self._model.get_state_for_audio_prompt(conditioning)
         sr = self._model.sample_rate
         chunks = []
-        for chunk in self._model.generate_audio_stream(state, text, max_tokens=int(max_tokens)):
+        for chunk in self._model.generate_audio_stream(audio_state, text, max_tokens=int(max_tokens)):
             arr = chunk.detach().cpu().numpy().astype("float32")
             chunks.append(arr)
             yield sr, arr
         if chunks:
             full = _peak_normalize(np.concatenate(chunks))
-            sf.write(os.path.join(OUTPUTS, f"pocket_{int(time.time())}.wav"), full, sr)
+            sf.write(os.path.join(OUTPUTS, f"pocket_{uuid.uuid4().hex}.wav"), full, sr)
 
 
-# Registro de backends disponibles. Agregar un modelo = una línea aquí.
-BACKENDS = {b.name: b for b in (SupertonicBackend(), PocketBackend(), QwenBackend())}
+# Registro de backends. Agregar un modelo = una línea acá.
+_all_backends = (SupertonicBackend(), PocketBackend(), QwenBackend())
+# MODELBOX_MODELS (lo setea el Dockerfile desde el ARG MODELS) limita qué modelos
+# están disponibles en esta imagen: solo se incluyen los que tienen sus librerías
+# instaladas. Sin la variable (uso local), están todos.
+_selected = os.environ.get("MODELBOX_MODELS")
+if _selected:
+    # Filtro estricto: solo los modelos cuyas librerías se instalaron en este
+    # build. Puede dejar BACKENDS vacío (p. ej. build whisper-solo); la UI lo maneja.
+    _keys = {k.strip() for k in _selected.split(",") if k.strip()}
+    _all_backends = tuple(b for b in _all_backends if b.key in _keys)
+BACKENDS = {b.name: b for b in _all_backends}

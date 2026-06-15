@@ -13,6 +13,9 @@ models/pockettts/weights/
 # Audios generados
 outputs/
 
+# Estado local del servicio (modelos descargados / habilitados)
+.state/
+
 # Audio de referencia personal — cada usuario debe poner el suyo
 reference.ogg
 reference.wav

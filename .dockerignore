@@ -1,0 +1,33 @@
+# No mandar al contexto de build cosas pesadas o locales: aceleran el build y
+# evitan meter modelos/venv dentro de la imagen (se descargan en runtime).
+.git
+.gitignore
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.cache/
+
+# Modelos descargados y pesos gated (se bajan/montan en runtime, no van a la imagen).
+models/supertonic/assets/
+models/pockettts/weights/
+
+# Estado local y audios generados (se montan en volúmenes en runtime).
+.state/
+outputs/
+reference.ogg
+reference.wav
+reference.mp3
+models/qwen3/reference.*
+*_tmp_ref_*.wav
+temp_ref_*.wav
+
+# Tooling y editores.
+.atl/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# El propio archivo de compose y docs no hacen falta dentro de la imagen.
+docker-compose.yml

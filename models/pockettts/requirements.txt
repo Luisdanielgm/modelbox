@@ -1,4 +1,5 @@
 # Pocket TTS (Kyutai, CPU). Liviano (~100M), corre en <1GB de RAM.
 pocket-tts>=2.1.0
 soundfile>=0.10.0
-# torch 2.5+ (versión CPU alcanza). En este repo ya viene con Qwen.
+# torch lo instala el Dockerfile desde el índice CPU (torch==2.10.0) cuando se
+# incluye pocket o qwen. Localmente: pip install torch (CPU) si no lo tenés.

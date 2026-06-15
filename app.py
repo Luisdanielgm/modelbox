@@ -1,15 +1,17 @@
-"""Interfaz unificada multi-modelo TTS (Gradio).
+"""Interfaz unificada multi-modelo (Gradio): TTS + transcripción (STT) + guía de API.
 
-Selector de modelo + controles que se adaptan a las capacidades de cada uno
-+ monitor de recursos (CPU/RAM/almacenamiento) en vivo.
+Controles que se adaptan a las capacidades de cada modelo, pestaña de
+transcripción, una pestaña que explica cómo usar la API, y monitor de recursos
++ cola de inferencia en vivo.
 """
 import logging
 import os
 
 import gradio as gr
 
-from shared import monitor
+from shared import inference, monitor, state
 from shared.backends import BACKENDS
+from shared.transcribe import TRANSCRIBERS
 
 
 class _DropContentLengthError(logging.Filter):
@@ -32,13 +34,38 @@ OUTPUTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
 os.makedirs(OUTPUTS, exist_ok=True)
 
 MODEL_NAMES = list(BACKENDS.keys())
-DEFAULT_MODEL = MODEL_NAMES[0]
+DEFAULT_MODEL = MODEL_NAMES[0] if MODEL_NAMES else None
+WHISPER = next(iter(TRANSCRIBERS.values()), None)
+WHISPER_NAME = WHISPER.name if WHISPER else None
+API_ENABLED = bool(os.environ.get("API_TOKEN"))
+
+
+def _friendly_error(e):
+    """Traduce excepciones técnicas frecuentes a algo accionable para el usuario."""
+    s = str(e)
+    low = s.lower()
+    if "no module named" in low:
+        return "Este modelo no está incluido en este build de Modelbox."
+    if "out of memory" in low or "cannot allocate" in low or "memoryerror" in low:
+        return "Memoria insuficiente para cargar este modelo. Probá uno más liviano."
+    if "gated" in low or "401" in low or "unauthorized" in low or "login" in low:
+        return "Faltan los pesos/credenciales gated de Hugging Face para este modelo."
+    return s
+
+
+def _status_md(model_name):
+    backend = BACKENDS[model_name]
+    dl = "✅ descargado" if backend.is_downloaded() else "⬇️ no descargado"
+    en = "🔓 habilitado en API" if state.is_enabled(model_name) else "🔒 deshabilitado en API"
+    return f"**Estado:** {dl} · {en}"
 
 
 def on_model_change(model_name):
-    caps = BACKENDS[model_name].capabilities
+    backend = BACKENDS[model_name]
+    caps = backend.capabilities
     presets = caps["presets"]
     langs = caps["languages"]
+    dl = backend.is_downloaded()
     return (
         gr.update(choices=presets, value=presets[0] if presets else None,
                   visible=bool(presets)),
@@ -48,7 +75,25 @@ def on_model_change(model_name):
         gr.update(visible=caps["has_steps"]),
         gr.update(visible=caps["clone"]),
         gr.update(visible=caps["ref_text"]),
+        _status_md(model_name),
+        gr.update(visible=not dl),          # download_btn
+        gr.update(value=state.is_enabled(model_name)),  # enable_cb
+        gr.update(interactive=dl),          # gen_btn: solo si está descargado
     )
+
+
+def do_download(model_name):
+    try:
+        BACKENDS[model_name].download()
+        msg = f"Listo: {model_name} descargado."
+    except Exception as e:
+        return _status_md(model_name), gr.update(), gr.update(), f"Error al descargar: {_friendly_error(e)}"
+    return _status_md(model_name), gr.update(visible=False), gr.update(interactive=True), msg
+
+
+def set_enable(model_name, value):
+    state.set_enabled(model_name, bool(value))
+    return _status_md(model_name)
 
 
 def generate(model_name, text, voice, lang, speed, steps, ref_audio, ref_text):
@@ -56,6 +101,9 @@ def generate(model_name, text, voice, lang, speed, steps, ref_audio, ref_text):
         yield None, "Escribí algo de texto primero."
         return
     backend = BACKENDS[model_name]
+    if not backend.is_downloaded():
+        yield None, f"Descargá el modelo {model_name} primero (botón de arriba)."
+        return
     caps = backend.capabilities
     opts = {}
     if caps["presets"]:
@@ -70,83 +118,244 @@ def generate(model_name, text, voice, lang, speed, steps, ref_audio, ref_text):
         opts["ref_audio"] = ref_audio
     if caps["ref_text"]:
         opts["ref_text"] = ref_text or None
+    # Aviso de cola: si no hay turno libre, otra inferencia está corriendo.
+    q = inference.status()
+    if q["active"] >= q["max_concurrent"]:
+        yield None, f"En cola, esperando turno… ({q['waiting']} adelante)"
     try:
         # Streaming solo si el modelo corre en GPU (rápido > realtime); en CPU
         # se atasca, así que ahí generamos todo y reproducimos al final.
         stream = hasattr(backend, "synthesize_stream") and backend.uses_gpu()
         if stream:
             import numpy as np
-            # Pre-buffer ~2s antes de reproducir y luego mandar bloques de ~0.7s.
-            # Con RTF < 1 (GPU), el colchón inicial evita que el player se vacíe;
-            # bloques grandes reducen los cortes vs. mandar chunks de ~80ms.
+            # Pre-buffer ~3s antes de reproducir y luego mandar bloques de ~6s.
             sr = None
             acc, acc_len, started = [], 0, False
             preroll = block = 0
-            for s, chunk in backend.synthesize_stream(text, **opts):
-                sr = s
-                if not preroll:
-                    preroll, block = int(3.0 * sr), int(6.0 * sr)
-                acc.append(chunk)
-                acc_len += len(chunk)
-                if acc_len >= (block if started else preroll):
+            with inference.slot():
+                for s, chunk in backend.synthesize_stream(text, **opts):
+                    sr = s
+                    if not preroll:
+                        preroll, block = int(3.0 * sr), int(6.0 * sr)
+                    acc.append(chunk)
+                    acc_len += len(chunk)
+                    if acc_len >= (block if started else preroll):
+                        yield (sr, np.concatenate(acc)), "Generando…"
+                        acc, acc_len, started = [], 0, True
+                if acc:
                     yield (sr, np.concatenate(acc)), "Generando…"
-                    acc, acc_len, started = [], 0, True
-            if acc:
-                yield (sr, np.concatenate(acc)), "Generando…"
+            state.cleanup_outputs()
             yield gr.update(), "Listo"
         else:
             import soundfile as sf
-            path = backend.synthesize(text, **opts)
+            with inference.slot():
+                path = backend.synthesize(text, **opts)
             data, sr = sf.read(path, dtype="float32")
+            state.cleanup_outputs()
             yield (sr, data), f"Listo: {os.path.basename(path)}"
     except Exception as e:
-        yield None, f"Error: {e}"
+        yield None, f"Error: {_friendly_error(e)}"
+
+
+# --- Transcripción (STT) ---
+def _tr_status_md():
+    if not WHISPER:
+        return "_Whisper no incluido en este build._"
+    dl = "✅ descargado" if WHISPER.is_downloaded() else "⬇️ no descargado"
+    en = "🔓 habilitado en API" if state.is_enabled(WHISPER_NAME) else "🔒 deshabilitado en API"
+    return f"**Whisper** ({WHISPER.size}, int8, ~1 GB RAM): {dl} · {en}"
+
+
+def do_download_whisper():
+    try:
+        WHISPER.download()
+        msg = "Listo: Whisper descargado."
+    except Exception as e:
+        return _tr_status_md(), gr.update(), gr.update(), f"Error al descargar: {_friendly_error(e)}"
+    return _tr_status_md(), gr.update(visible=False), gr.update(interactive=True), msg
+
+
+def set_enable_whisper(value):
+    state.set_enabled(WHISPER_NAME, bool(value))
+    return _tr_status_md()
+
+
+def transcribe(audio_path, language):
+    if not WHISPER:
+        return "", "Whisper no está incluido en este build."
+    if not audio_path:
+        return "", "Subí o grabá un audio primero."
+    if not WHISPER.is_downloaded():
+        return "", "Descargá Whisper primero (botón de arriba)."
+    try:
+        with inference.slot():
+            result = WHISPER.transcribe(audio_path, language=language or None)
+    except Exception as e:
+        return "", f"Error: {_friendly_error(e)}"
+    return result["text"], f"Listo (idioma: {result['language']})"
 
 
 def refresh_monitor():
-    return monitor.format_markdown(monitor.snapshot(OUTPUTS))
+    md = monitor.format_markdown(monitor.snapshot(OUTPUTS))
+    q = inference.status()
+    md += (f"\n\n**Cola de inferencia**: {q['active']} en curso · {q['waiting']} esperando "
+           f"(máx {q['max_concurrent']} en paralelo)")
+    return md
 
 
-with gr.Blocks(title="TTS Multi-Modelo") as demo:
-    gr.Markdown("# TTS Multi-Modelo\nGenerá voz en local. Cambiá de modelo y la interfaz se adapta.")
+def _api_md():
+    """Guía de uso de la API, embebida en el panel."""
+    estado = ("🟢 **API activa** — el servidor tiene `API_TOKEN` configurado."
+              if API_ENABLED else
+              "🔴 **API desactivada** — el servidor NO tiene `API_TOKEN`. "
+              "Configurá esa variable de entorno para habilitarla.")
+    incl_tts = ", ".join(MODEL_NAMES) or "— (ninguno en este build)"
+    incl_stt = WHISPER.name if WHISPER else "— (no incluido)"
+    header = (
+        f"## Usar Modelbox por API\n\n{estado}\n\n"
+        f"**Modelos en este build** — Voz (TTS): {incl_tts} · Transcripción (STT): {incl_stt}\n\n"
+        "Un modelo responde por API solo si está **descargado** *y* **habilitado** "
+        "(el toggle «Habilitar en la API» de cada pestaña). El token de la API se "
+        "configura en el servidor (env var `API_TOKEN`), no acá.\n\n"
+    )
+    body = """### Autenticación
+
+Todas las rutas (salvo `/api/health`) requieren el header:
+
+```
+Authorization: Bearer <API_TOKEN>
+```
+
+### Endpoints
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| GET | `/api/health` | Estado + cola + modelos (sin token) |
+| GET | `/api/models` | Modelos TTS y sus capacidades |
+| POST | `/api/tts` | Genera voz (preset) → WAV |
+| POST | `/api/clone` | Clona voz desde un audio → WAV |
+| POST | `/api/transcribe` | Transcribe un audio → texto |
+
+### Ejemplos
+
+```bash
+# Generar voz
+curl -X POST <host>/api/tts \\
+  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \\
+  -d '{"model":"Supertonic-3","text":"Hola mundo","voice":"F1","lang":"es"}' \\
+  --output salida.wav
+
+# Transcribir (multipart)
+curl -X POST <host>/api/transcribe \\
+  -H "Authorization: Bearer $API_TOKEN" \\
+  -F "audio=@grabacion.mp3" -F "language=es"
+```
+
+```python
+import requests
+r = requests.post("<host>/api/tts",
+    headers={"Authorization": f"Bearer {TOKEN}"},
+    json={"model": "Supertonic-3", "text": "Hola", "voice": "F1", "lang": "es"})
+open("salida.wav", "wb").write(r.content)
+```
+
+Docs interactivas (Swagger): **[/api/docs](/api/docs)** · estado: **[/api/health](/api/health)**.
+Reemplazá `<host>` por la URL de este servidor.
+"""
+    return header + body
+
+
+with gr.Blocks(title="Modelbox") as demo:
+    gr.Markdown("# Modelbox\nGenerá voz, transcribí y exponé todo por API. Todo corre en tu máquina.")
 
     with gr.Row():
         with gr.Column(scale=3):
-            model_dd = gr.Dropdown(MODEL_NAMES, value=DEFAULT_MODEL, label="Modelo")
-            text_in = gr.Textbox(label="Texto", lines=3, placeholder="Escribí lo que querés sintetizar...")
+            with gr.Tabs():
+                if MODEL_NAMES:
+                    with gr.Tab("Generar voz (TTS)"):
+                        gr.Markdown(f"Modelos en este build: **{', '.join(MODEL_NAMES)}**. "
+                                    "Elegí uno, **descargalo**, y después generá.")
+                        model_dd = gr.Dropdown(MODEL_NAMES, value=DEFAULT_MODEL, label="Modelo")
+                        model_status = gr.Markdown(_status_md(DEFAULT_MODEL))
+                        with gr.Row():
+                            download_btn = gr.Button(
+                                "Descargar modelo",
+                                visible=not BACKENDS[DEFAULT_MODEL].is_downloaded())
+                            enable_cb = gr.Checkbox(
+                                label="Habilitar en la API",
+                                info="Permite consumir este modelo por /api/tts (requiere API_TOKEN en el servidor).",
+                                value=state.is_enabled(DEFAULT_MODEL))
+                        text_in = gr.Textbox(label="Texto", lines=3,
+                                             placeholder="Escribí lo que querés sintetizar...")
 
-            init_caps = BACKENDS[DEFAULT_MODEL].capabilities
-            voice_dd = gr.Dropdown(init_caps["presets"], value=(init_caps["presets"] or [None])[0],
-                                   label="Voz preset", visible=bool(init_caps["presets"]),
-                                   allow_custom_value=True)
-            lang_dd = gr.Dropdown(init_caps["languages"],
-                                  value=(init_caps["languages"] or [None])[0],
-                                  label="Idioma", visible=bool(init_caps["languages"]))
-            speed_sl = gr.Slider(0.5, 2.0, value=1.05, step=0.05, label="Velocidad",
-                                 visible=init_caps["has_speed"])
-            steps_sl = gr.Slider(1, 32, value=8, step=1, label="Pasos (calidad/velocidad)",
-                                 visible=init_caps["has_steps"])
-            ref_audio_in = gr.Audio(sources=["microphone", "upload"], type="filepath",
-                                    label="Audio de referencia (clonación)",
-                                    visible=init_caps["clone"])
-            ref_text_in = gr.Textbox(label="Texto del audio de referencia (opcional)",
-                                     visible=init_caps["ref_text"])
+                        init_caps = BACKENDS[DEFAULT_MODEL].capabilities
+                        voice_dd = gr.Dropdown(init_caps["presets"],
+                                               value=(init_caps["presets"] or [None])[0],
+                                               label="Voz preset", visible=bool(init_caps["presets"]),
+                                               allow_custom_value=True)
+                        lang_dd = gr.Dropdown(init_caps["languages"],
+                                              value=(init_caps["languages"] or [None])[0],
+                                              label="Idioma", visible=bool(init_caps["languages"]))
+                        speed_sl = gr.Slider(0.5, 2.0, value=1.05, step=0.05, label="Velocidad",
+                                             visible=init_caps["has_speed"])
+                        steps_sl = gr.Slider(1, 32, value=8, step=1, label="Pasos (calidad/velocidad)",
+                                             visible=init_caps["has_steps"])
+                        ref_audio_in = gr.Audio(sources=["microphone", "upload"], type="filepath",
+                                                label="Audio de referencia (clonación)",
+                                                visible=init_caps["clone"])
+                        ref_text_in = gr.Textbox(label="Texto del audio de referencia (opcional)",
+                                                 visible=init_caps["ref_text"])
+                        gen_btn = gr.Button("Generar", variant="primary",
+                                            interactive=BACKENDS[DEFAULT_MODEL].is_downloaded())
+                        status = gr.Markdown("")
+                        audio_out = gr.Audio(label="Resultado", streaming=True, autoplay=True)
 
-            gen_btn = gr.Button("Generar", variant="primary")
-            status = gr.Markdown("")
+                if WHISPER:
+                    with gr.Tab("Transcribir (STT)"):
+                        tr_status = gr.Markdown(_tr_status_md())
+                        with gr.Row():
+                            tr_download_btn = gr.Button("Descargar Whisper",
+                                                        visible=not WHISPER.is_downloaded())
+                            tr_enable_cb = gr.Checkbox(
+                                label="Habilitar en la API",
+                                info="Permite consumir Whisper por /api/transcribe (requiere API_TOKEN).",
+                                value=state.is_enabled(WHISPER_NAME))
+                        tr_audio_in = gr.Audio(sources=["upload", "microphone"], type="filepath",
+                                               label="Audio a transcribir (mp3 / ogg / m4a / flac / wav)")
+                        tr_lang_in = gr.Dropdown(["", "es", "en", "pt", "fr", "de", "it"], value="",
+                                                 label="Idioma (vacío = autodetecta)",
+                                                 allow_custom_value=True)
+                        tr_btn = gr.Button("Transcribir", variant="primary",
+                                           interactive=WHISPER.is_downloaded())
+                        tr_text_out = gr.Textbox(label="Transcripción", lines=4)
+                        tr_msg = gr.Markdown("")
+
+                with gr.Tab("API"):
+                    gr.Markdown(_api_md())
 
         with gr.Column(scale=2):
-            audio_out = gr.Audio(label="Resultado", streaming=True, autoplay=True)
             gr.Markdown("### Recursos")
             mon_md = gr.Markdown(refresh_monitor())
             timer = gr.Timer(1.5)
 
-    model_dd.change(on_model_change, inputs=model_dd,
-                    outputs=[voice_dd, lang_dd, speed_sl, steps_sl, ref_audio_in, ref_text_in])
-    gen_btn.click(generate,
-                  inputs=[model_dd, text_in, voice_dd, lang_dd, speed_sl, steps_sl,
-                          ref_audio_in, ref_text_in],
-                  outputs=[audio_out, status])
+    if MODEL_NAMES:
+        model_dd.change(on_model_change, inputs=model_dd,
+                        outputs=[voice_dd, lang_dd, speed_sl, steps_sl, ref_audio_in, ref_text_in,
+                                 model_status, download_btn, enable_cb, gen_btn])
+        download_btn.click(do_download, inputs=model_dd,
+                           outputs=[model_status, download_btn, gen_btn, status])
+        enable_cb.change(set_enable, inputs=[model_dd, enable_cb], outputs=model_status)
+        gen_btn.click(generate,
+                      inputs=[model_dd, text_in, voice_dd, lang_dd, speed_sl, steps_sl,
+                              ref_audio_in, ref_text_in],
+                      outputs=[audio_out, status])
+
+    if WHISPER:
+        tr_download_btn.click(do_download_whisper,
+                              outputs=[tr_status, tr_download_btn, tr_btn, tr_msg])
+        tr_enable_cb.change(set_enable_whisper, inputs=tr_enable_cb, outputs=tr_status)
+        tr_btn.click(transcribe, inputs=[tr_audio_in, tr_lang_in], outputs=[tr_text_out, tr_msg])
+
     timer.tick(refresh_monitor, outputs=mon_md)
 
 
