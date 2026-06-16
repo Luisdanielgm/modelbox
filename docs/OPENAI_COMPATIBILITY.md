@@ -49,6 +49,42 @@ Authorization: Bearer <API_TOKEN>
 
 If auth fails, `/v1/*` returns OpenAI-shaped errors.
 
+## Voice, language, and capability discovery
+
+Do not extend `/v1/models` with custom voice metadata. Keep it OpenAI-style and simple for client compatibility.
+
+Use native Modelbox discovery instead:
+
+```http
+GET /api/models
+Authorization: Bearer <API_TOKEN>
+```
+
+This is the source of truth for:
+
+- available model ids,
+- whether each model is downloaded,
+- whether each model is enabled for API use,
+- supported voices/presets,
+- supported languages,
+- whether cloning is supported,
+- optional controls such as speed/steps.
+
+Example Supertonic voice usage through OpenAI-compatible TTS:
+
+```json
+{
+  "model": "Supertonic-3",
+  "input": "Hola mundo",
+  "voice": "F1",
+  "response_format": "wav"
+}
+```
+
+Known Supertonic voices currently exposed by `/api/models`: `M1`, `M2`, `M3`, `M4`, `M5`, `F1`, `F2`, `F3`, `F4`, `F5`.
+
+Pocket-TTS voices are also discovered from `/api/models`, for example `alba`, `cosette`, `marius`, `javert`, and others.
+
 ## Endpoint mapping
 
 ### Models

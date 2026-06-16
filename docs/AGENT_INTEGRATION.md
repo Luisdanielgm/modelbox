@@ -44,6 +44,24 @@ Authorization: Bearer <API_TOKEN>
 
 Never embed the token in source code. Pass it through environment/configuration.
 
+## Discover voices and capabilities
+
+Use `/v1/models` only to discover model ids in OpenAI style.
+
+Use native `GET /api/models` with Bearer token to discover voices, languages, clone support, and model-specific capabilities.
+
+For Supertonic-3, pass one of its presets as `voice` in `/v1/audio/speech`, for example `F1`, `F2`, `M1`, etc.
+
+Example:
+
+```json
+{
+  "model": "Supertonic-3",
+  "input": "Hola mundo",
+  "voice": "F1"
+}
+```
+
 ## OpenAI-compatible endpoints
 
 ### `GET /v1/models`

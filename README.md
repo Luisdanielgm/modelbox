@@ -198,6 +198,14 @@ curl -H "Authorization: Bearer $API_TOKEN" \
   "http://localhost:7860/api/usage?limit=100"
 ```
 
+Para conocer voces/presets, idiomas y capacidades no uses `/v1/models`; ese endpoint se mantiene simple para compatibilidad OpenAI. Usar `GET /api/models` con token como fuente de verdad.
+
+Ejemplo Supertonic por `/v1/audio/speech`:
+
+```json
+{ "model": "Supertonic-3", "input": "Hola mundo", "voice": "F1" }
+```
+
 Endpoints publicos utiles:
 
 - `/api/health`: estado, cola, limites y storage.

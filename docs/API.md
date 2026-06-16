@@ -80,6 +80,27 @@ Example health shape:
 }
 ```
 
+## Voice and capability discovery
+
+`/v1/models` intentionally returns only OpenAI-style model ids.
+
+For voices, languages, clone support, and model-specific controls, call:
+
+```http
+GET /api/models
+Authorization: Bearer <API_TOKEN>
+```
+
+Example Supertonic request through `/v1/audio/speech`:
+
+```json
+{
+  "model": "Supertonic-3",
+  "input": "Hola mundo",
+  "voice": "F1"
+}
+```
+
 ## OpenAI-compatible endpoints
 
 ### `GET /v1/models`
