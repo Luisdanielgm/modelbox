@@ -340,6 +340,7 @@ curl -X POST <host>/v1/audio/transcriptions \
 ```
 
 Docs interactivas (Swagger): **[/api/docs](/api/docs)** - OpenAPI JSON: **[/api/openapi.json](/api/openapi.json)**.
+Guia detallada en repo: `docs/OPENAI_COMPATIBILITY.md`.
 Reemplazar `<host>` por la URL de este servidor.
 """
     return header + body

@@ -35,3 +35,4 @@ temp_ref_*.wav
 Thumbs.db
 .idea/
 .vscode/
+scripts/

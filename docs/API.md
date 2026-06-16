@@ -7,6 +7,8 @@ Modelbox exposes two compatible API surfaces in the same server:
 
 The `/v1/*` routes are additive wrappers over the same logic. Existing `/api/*` clients and the panel keep working.
 
+For the dedicated architecture and policy guide, see [OPENAI_COMPATIBILITY.md](OPENAI_COMPATIBILITY.md).
+
 ## Authentication
 
 Protected endpoints require:

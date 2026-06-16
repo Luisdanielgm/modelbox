@@ -172,6 +172,8 @@ Ambas usan `Authorization: Bearer <API_TOKEN>`. Los `/v1/*` son aditivos: no rom
 
 **Precio actual:** USD 0 durante el periodo inicial de prueba. Consultar `/api/pricing`.
 
+Guia especifica de compatibilidad OpenAI: [docs/OPENAI_COMPATIBILITY.md](docs/OPENAI_COMPATIBILITY.md).
+
 ```bash
 # OpenAI-compatible: listar modelos descargados + habilitados
 curl -H "Authorization: Bearer $API_TOKEN" http://localhost:7860/v1/models

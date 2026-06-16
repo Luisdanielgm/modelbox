@@ -3,6 +3,8 @@
 Use this guide when an automated agent needs to call Modelbox without opening the UI.
 The visual panel may require username/password, but API execution uses a Bearer token.
 
+For detailed OpenAI compatibility architecture, see [OPENAI_COMPATIBILITY.md](OPENAI_COMPATIBILITY.md).
+
 Production base URL:
 
 ```txt
