@@ -1,241 +1,208 @@
-# Modelbox — API REST
+# Modelbox API
 
-API HTTP para generar voz (TTS), clonar y transcribir (STT) desde aplicaciones
-externas. Convive con el panel visual en el mismo proceso y puerto (por defecto `7860`).
+Modelbox exposes two compatible API surfaces in the same server:
 
-> Docs interactivas (Swagger) autogeneradas en **`/api/docs`**.
+- Native Modelbox API: `/api/*`.
+- OpenAI-compatible wrappers: `/v1/*`.
 
-## Autenticación
+The `/v1/*` routes are additive wrappers over the same logic. Existing `/api/*` clients and the panel keep working.
 
-La API se **activa** solo si está configurada la variable de entorno `API_TOKEN`.
-Sin ella, los endpoints protegidos devuelven `503`.
+## Authentication
 
-Todas las llamadas protegidas requieren el header:
+Protected endpoints require:
 
-```
+```http
 Authorization: Bearer <API_TOKEN>
 ```
 
-## Precio actual
+Public endpoints:
 
-Durante el periodo inicial de prueba, el precio actual es **USD 0**.
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/health` | Health, queue, storage, limits, downloaded/enabled state |
+| GET | `/api/pricing` | Current price; USD 0 during initial trial |
+| GET | `/api/openapi.json` | OpenAPI schema, including `/v1/*` routes |
+| GET | `/api/docs` | Swagger UI |
+| GET | `/api/agent-guide` | Concise integration guide for agents |
 
-- `GET /api/pricing` devuelve el precio vigente sin token.
-- `GET /api/usage` incluye el mismo bloque `pricing` junto al resumen de uso.
+Protected native endpoints:
 
-## Requisito previo
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/models` | Native model list and capabilities |
+| GET | `/api/usage` | Usage log and summary |
+| POST | `/api/tts` | Native TTS, JSON -> audio/wav |
+| POST | `/api/clone` | Native voice clone, multipart -> audio/wav |
+| POST | `/api/transcribe` | Native STT, multipart -> `{text, language}` |
 
-Un modelo solo responde por API si está:
+Protected OpenAI-compatible endpoints:
 
-1. **Descargado** — desde el panel (botón *Descargar*), o no estará disponible.
-2. **Habilitado** — toggle *Habilitar en la API* del panel.
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/v1/models` | OpenAI-style model list: downloaded + enabled models only |
+| POST | `/v1/audio/speech` | OpenAI-compatible TTS wrapper over `/api/tts` |
+| POST | `/v1/audio/transcriptions` | OpenAI-compatible STT wrapper over `/api/transcribe` |
 
-Si falta alguno, `/api/tts` devuelve `409` (no descargado) o `403` (no habilitado).
+## Current price
 
-## Endpoints
+During the initial trial period, the current price is **USD 0**.
 
-| Método | Ruta | Auth | Descripción |
-|--------|------|:----:|-------------|
-| `GET`  | `/api/health`     | — | Estado, cola, modelos y transcriptores |
-| `GET`  | `/api/models`     | ✅ | Modelos TTS con sus `capabilities` |
-| `POST` | `/api/tts`        | ✅ | Genera audio (voz preset) y devuelve el WAV |
-| `POST` | `/api/clone`      | ✅ | Clona voz desde un audio de referencia → WAV |
-| `POST` | `/api/transcribe` | ✅ | Transcribe un audio (STT) → texto |
+- `GET /api/pricing` returns the active pricing object without token.
+- `GET /api/usage` includes the same pricing block with usage summary.
 
-### `GET /api/health`
+## Limits
 
-Sin token. Útil para health checks.
+Read active values from `GET /api/health`, field `limits`.
+
+Default service limits:
+
+| Variable | Default | Applies to | Error |
+|---|---:|---|---|
+| `MODELBOX_MAX_TTS_CHARS` | `2000` | `/api/tts`, `/v1/audio/speech` | `400` |
+| `MODELBOX_MAX_CLONE_CHARS` | `2000` | `/api/clone` | `400` |
+| `MODELBOX_MAX_AUDIO_SECONDS` | `1200` | `/api/clone`, `/api/transcribe`, `/v1/audio/transcriptions` | `400` |
+| `MODELBOX_MAX_UPLOAD_MB` | `30` | upload endpoints | `413` |
+
+Example health shape:
 
 ```json
 {
   "status": "ok",
-  "queue": { "max_concurrent": 1, "active": 0, "waiting": 0 },
-  "models": [
-    { "name": "Supertonic-3", "downloaded": true,  "enabled": true  },
-    { "name": "Pocket-TTS",   "downloaded": false, "enabled": false }
-  ],
-  "transcribers": [
-    { "name": "Whisper", "downloaded": true, "enabled": true }
+  "queue": { "max_concurrent": 3, "active": 0, "waiting": 0 },
+  "limits": {
+    "max_upload_mb": 30,
+    "max_tts_chars": 2000,
+    "max_clone_chars": 2000,
+    "max_audio_seconds": 1200
+  }
+}
+```
+
+## OpenAI-compatible endpoints
+
+### `GET /v1/models`
+
+Returns downloaded and API-enabled TTS/STT models only.
+
+```json
+{
+  "object": "list",
+  "data": [
+    { "id": "Whisper", "object": "model" },
+    { "id": "Pocket-TTS", "object": "model" }
   ]
 }
 ```
 
-`queue` muestra cuántas inferencias hay en curso (`active`) y cuántas esperando
-(`waiting`). En CPU el límite suele ser 1 (una inferencia ya usa todos los cores);
-los pedidos extra esperan su turno, no fallan.
+### `POST /v1/audio/speech`
 
-### `GET /api/models`
+Content type: `application/json`.
 
-Devuelve cada modelo con sus capacidades (voces preset, idiomas, controles).
-Permite saber qué `voice`/`lang` acepta cada modelo.
-
-```json
-[
-  {
-    "name": "Supertonic-3",
-    "downloaded": true,
-    "enabled": true,
-    "capabilities": {
-      "clone": false, "ref_text": false,
-      "presets": ["M1", "F1", "..."],
-      "languages": ["es", "en", "..."],
-      "has_speed": true, "has_steps": true
-    }
-  }
-]
-```
-
-### `GET /api/usage`
-
-Devuelve el registro persistente de llamadas y un resumen agregado. Requiere token.
-
-Query params:
-
-| Campo | Tipo | Default | Notas |
-|-------|------|---------|-------|
-| `limit` | int | `100` | M?ximo `1000` |
-| `type` | string | ? | Opcional: `tts`, `clone`, `transcribe` |
-
-El log vive en el volumen persistente: `/modelbox-data/logs/calls.jsonl`.
-No guarda texto crudo ni audio: solo métricas como tipo, modelo, caracteres, tamaño de subida, duración, espera de cola, concurrencia observada, estado HTTP y error si falló.
+Request:
 
 ```json
 {
-  "pricing": { "currency": "USD", "price_per_call": 0 },
-  "summary": {
-    "total_calls": 10,
-    "total_text_chars": 3200,
-    "max_text_chars": 900,
-    "max_duration_seconds": 18.2,
-    "max_wait_seconds": 3.1,
-    "by_type": { "tts": 7, "clone": 1, "transcribe": 2 }
-  },
-  "calls": []
+  "model": "Pocket-TTS",
+  "input": "Hola mundo",
+  "voice": "alba",
+  "response_format": "wav"
 }
 ```
 
-### `POST /api/tts`
+Field mapping:
 
-Cuerpo JSON:
+| OpenAI field | Modelbox native field |
+|---|---|
+| `input` | `text` |
+| `voice` | `voice` |
+| `model` | `model` |
 
-| Campo   | Tipo   | Req. | Notas |
-|---------|--------|:----:|-------|
-| `model` | string | ✅ | Nombre exacto (ver `/api/models`), p. ej. `"Supertonic-3"` |
-| `text`  | string | ✅ | Texto a sintetizar |
-| `voice` | string | — | Voz preset (según el modelo) |
-| `lang`  | string | — | Idioma ISO (solo modelos con idiomas, p. ej. Supertonic) |
-| `speed` | number | — | Velocidad (solo si el modelo la soporta) |
-| `steps` | int    | — | Pasos de difusión (solo si el modelo lo soporta) |
+Response: audio bytes. Modelbox currently returns `Content-Type: audio/wav` even if `response_format` is omitted.
 
-**Respuesta:** `200` con el cuerpo binario del audio (`Content-Type: audio/wav`).
-El servidor **no guarda** el audio: lo devuelve y lo descarta.
+### `POST /v1/audio/transcriptions`
 
-### `POST /api/clone`
+Content type: `multipart/form-data`.
 
-Clona voz desde un audio de referencia. Es **multipart/form-data** (no JSON),
-porque incluye un archivo. El modelo debe soportar clonación (`capabilities.clone`).
+Fields:
 
-| Campo | Tipo | Req. | Notas |
-|-------|------|:----:|-------|
-| `model` | form | ✅ | Modelo con clonación (p. ej. `"Pocket-TTS"`) |
-| `text` | form | ✅ | Texto a sintetizar con la voz clonada |
-| `ref_audio` | file | ✅ | Audio de referencia (se procesa y se **borra** al instante) |
-| `ref_text` | form | — | Transcripción del audio de referencia (solo si el modelo lo usa) |
+| Field | Required | Notes |
+|---|---:|---|
+| `file` | yes | Input audio file. Maps to native `audio`. |
+| `model` | yes | Usually `Whisper`. |
+| `response_format` | no | `json` or `verbose_json`; `verbose_json` is accepted. |
+| `language` | no | Optional ISO language code, e.g. `es`. |
 
-**Respuesta:** `200` con el WAV (`audio/wav`). El audio de referencia **no se almacena**.
+Response:
 
-### `POST /api/transcribe`
+```json
+{
+  "text": "...",
+  "duration": 12.34,
+  "language": "es"
+}
+```
 
-Transcribe audio a texto (STT, Whisper). **multipart/form-data**. Acepta varios
-formatos (mp3/ogg/m4a/flac/wav); se decodifica internamente.
+`duration` is mandatory and is measured from the uploaded audio in seconds. Billing systems should use this value for per-second accounting.
 
-| Campo | Tipo | Req. | Notas |
-|-------|------|:----:|-------|
-| `audio` | file | ✅ | Audio a transcribir (se procesa y se **borra**) |
-| `language` | form | — | Idioma ISO (vacío = autodetecta) |
-| `model` | form | — | Transcriptor (default `"Whisper"`) |
+## OpenAI error shape for `/v1/*`
 
-**Respuesta:** `200` con JSON `{ "text": "...", "language": "es" }`.
+All non-2xx `/v1/*` responses use:
 
-## Ejemplos
+```json
+{
+  "error": {
+    "message": "...",
+    "type": "invalid_request_error",
+    "code": "..."
+  }
+}
+```
 
-### curl
+Status codes are preserved: `401`, `403`, `404`, `409`, `413`, `422`, `500`, `503`.
+
+## Examples
+
+### OpenAI-compatible TTS
 
 ```bash
-# Estado (sin token)
-curl http://localhost:7860/api/health
+curl -X POST http://localhost:7860/v1/audio/speech \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"Pocket-TTS","input":"Hola mundo","voice":"alba"}' \
+  --output speech.wav
+```
 
-# Modelos disponibles
-curl -H "Authorization: Bearer $API_TOKEN" http://localhost:7860/api/models
+### OpenAI-compatible STT
 
-# Generar y guardar el WAV
+```bash
+curl -X POST http://localhost:7860/v1/audio/transcriptions \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -F "file=@grabacion.wav" \
+  -F "model=Whisper" \
+  -F "response_format=verbose_json" \
+  -F "language=es"
+```
+
+### Native TTS
+
+```bash
 curl -X POST http://localhost:7860/api/tts \
   -H "Authorization: Bearer $API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"model":"Supertonic-3","text":"Hola mundo","voice":"F1","lang":"es"}' \
   --output salida.wav
+```
 
-# Clonar voz (multipart: texto + audio de referencia)
-curl -X POST http://localhost:7860/api/clone \
-  -H "Authorization: Bearer $API_TOKEN" \
-  -F "model=Pocket-TTS" -F "text=Hola con voz clonada" \
-  -F "ref_audio=@mi_voz.wav" \
-  --output clon.wav
+### Usage
 
-# Transcribir un audio (multipart)
-curl -X POST http://localhost:7860/api/transcribe \
-  -H "Authorization: Bearer $API_TOKEN" \
-  -F "audio=@grabacion.mp3" -F "language=es"
-
-# Leer uso reciente
+```bash
 curl -H "Authorization: Bearer $API_TOKEN" \
   "http://localhost:7860/api/usage?limit=100"
 ```
 
-### Python
+## Native endpoint notes
 
-```python
-import requests
-
-BASE = "http://localhost:7860"
-TOKEN = "tu-api-token"
-
-resp = requests.post(
-    f"{BASE}/api/tts",
-    headers={"Authorization": f"Bearer {TOKEN}"},
-    json={"model": "Pocket-TTS", "text": "Hola mundo", "voice": "alba"},
-)
-resp.raise_for_status()
-with open("salida.wav", "wb") as f:
-    f.write(resp.content)
-```
-
-### JavaScript (fetch)
-
-```js
-const BASE = "http://localhost:7860";
-const TOKEN = "tu-api-token";
-
-const resp = await fetch(`${BASE}/api/tts`, {
-  method: "POST",
-  headers: {
-    "Authorization": `Bearer ${TOKEN}`,
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({ model: "Supertonic-3", text: "Hola mundo", voice: "F1", lang: "es" }),
-});
-if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
-const blob = await resp.blob(); // audio/wav
-```
-
-## Códigos de error
-
-| Código | Significado |
-|:------:|-------------|
-| `400` | Falta el texto, o el modelo no soporta clonación |
-| `401` | Token inválido o ausente |
-| `403` | El modelo no está habilitado para la API |
-| `404` | Modelo/transcriptor desconocido |
-| `409` | El modelo no está descargado |
-| `503` | API deshabilitada (no se configuró `API_TOKEN`) |
-| `500` | Error de síntesis / clonación / transcripción |
+- `/api/tts` response is `audio/wav`.
+- `/api/clone` response is `audio/wav`.
+- `/api/transcribe` response is `{ "text": "...", "language": "es" }`.
+- `/api/usage` persists metadata in `/modelbox-data/logs/calls.jsonl`; it does not store raw text or audio.

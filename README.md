@@ -153,43 +153,66 @@ Variables operativas (opcionales, con default):
 
 | Variable | Default | Efecto |
 |----------|---------|--------|
-| `MODELBOX_MAX_CONCURRENT` | `1` | Inferencias en paralelo (en CPU, 1 ya usa todos los cores). |
-| `MODELBOX_WHISPER_SIZE` | `small` | Tamaño de Whisper: `small`/`medium`/`large-v3`. |
-| `MODELBOX_MAX_UPLOAD_MB` | `25` | Tope de tamaño para audios subidos por API. |
+| `MODELBOX_MAX_CONCURRENT` | `1` | Inferencias en paralelo; en produccion actual usamos `3`. |
+| `MODELBOX_MAX_TTS_CHARS` | `2000` | Tope de caracteres para `/api/tts`. |
+| `MODELBOX_MAX_CLONE_CHARS` | `2000` | Tope de caracteres para `/api/clone`. |
+| `MODELBOX_MAX_AUDIO_SECONDS` | `1200` | Tope de duracion para audios de clone/STT. |
+| `MODELBOX_MAX_UPLOAD_MB` | `30` | Tope de tamano para audios subidos por API. |
+| `MODELBOX_WHISPER_SIZE` | `small` | Tamano de Whisper: `small`/`medium`/`large-v3`. |
 | `MODELBOX_DATA_DIR` | *(vacio local, `/modelbox-data` en Docker)* | Directorio persistente unico. |
 
 ### API REST
 
-Un modelo se puede consumir por API si está **descargado** y **habilitado** (el
-toggle "Habilitar en la API" del panel). El audio se devuelve en la respuesta —
-no se guarda en el servidor.
+Modelbox expone dos superficies en el mismo servidor:
 
-**Precio actual:** USD 0 durante el periodo inicial de prueba. Consultar
-`/api/pricing` para leer el precio vigente.
+- `/api/*`: API nativa de Modelbox.
+- `/v1/*`: wrappers OpenAI-compatible para clientes OpenAI existentes.
+
+Ambas usan `Authorization: Bearer <API_TOKEN>`. Los `/v1/*` son aditivos: no rompen el panel ni los clientes actuales que usan `/api/*`.
+
+**Precio actual:** USD 0 durante el periodo inicial de prueba. Consultar `/api/pricing`.
 
 ```bash
-# Listar modelos y su estado
-curl -H "Authorization: Bearer $API_TOKEN" http://localhost:7860/api/models
+# OpenAI-compatible: listar modelos descargados + habilitados
+curl -H "Authorization: Bearer $API_TOKEN" http://localhost:7860/v1/models
 
-# Generar audio (se descarga directo como WAV)
-curl -X POST http://localhost:7860/api/tts \
+# OpenAI-compatible: generar audio
+curl -X POST http://localhost:7860/v1/audio/speech \
   -H "Authorization: Bearer $API_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"model":"Supertonic-3","text":"Hola mundo","voice":"F1","lang":"es"}' \
-  --output salida.wav
+  -d '{"model":"Pocket-TTS","input":"Hola mundo","voice":"alba"}' \
+  --output speech.wav
 
-# Leer registro/resumen de uso
+# OpenAI-compatible: transcribir con duration obligatorio
+curl -X POST http://localhost:7860/v1/audio/transcriptions \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -F "file=@grabacion.wav" \
+  -F "model=Whisper" \
+  -F "response_format=verbose_json" \
+  -F "language=es"
+
+# API nativa: uso/auditoria
 curl -H "Authorization: Bearer $API_TOKEN" \
   "http://localhost:7860/api/usage?limit=100"
 ```
 
-`GET /api/health` queda abierto (sin token) para chequeos de estado. Docs
-interactivas en `/api/docs`. **Guía completa de la API:** [docs/API.md](docs/API.md).
-Para agentes/automatizaciones: `/api/agent-guide` y `/api/openapi.json`.
+Endpoints publicos utiles:
+
+- `/api/health`: estado, cola, limites y storage.
+- `/api/pricing`: precio actual.
+- `/api/docs`: Swagger UI.
+- `/api/openapi.json`: schema OpenAPI, incluyendo `/v1/*`.
+- `/api/agent-guide`: guia corta para agentes.
+
+Errores de `/v1/*` usan shape OpenAI:
+
+```json
+{"error":{"message":"...","type":"invalid_request_error","code":"..."}}
+```
 
 El registro de llamadas vive en el volumen persistente (`/modelbox-data/logs/calls.jsonl`)
-y guarda métricas, no contenido crudo: tipo de llamada, modelo, caracteres, tamaño
-de subida, duración, espera de cola, concurrencia observada, estado HTTP y error.
+y guarda metricas, no contenido crudo: tipo de llamada, modelo, caracteres, tamano
+de subida, duracion, espera de cola, concurrencia observada, estado HTTP y error.
 
 ### Modelos por separado (CLI)
 

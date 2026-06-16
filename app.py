@@ -9,7 +9,7 @@ import os
 
 import gradio as gr
 
-from shared import inference, monitor, state
+from shared import inference, limits, monitor, state
 from shared.backends import BACKENDS
 from shared.paths import OUTPUTS
 from shared.transcribe import TRANSCRIBERS
@@ -125,6 +125,23 @@ def generate(model_name, text, voice, lang, speed, steps, ref_audio, ref_text):
     if not text or not text.strip():
         yield None, "Falta el texto a sintetizar."
         return
+    max_chars = limits.MODELBOX_MAX_CLONE_CHARS if ref_audio else limits.MODELBOX_MAX_TTS_CHARS
+    label = "Texto de clonacion" if ref_audio else "Texto TTS"
+    msg = limits.text_limit_error(text, max_chars, label)
+    if msg:
+        yield None, msg
+        return
+    if ref_audio:
+        try:
+            if limits.upload_too_large(os.path.getsize(ref_audio)):
+                yield None, f"Audio demasiado grande (max {limits.MODELBOX_MAX_UPLOAD_MB} MB)."
+                return
+        except OSError:
+            pass
+        msg = limits.audio_limit_error(ref_audio)
+        if msg:
+            yield None, msg
+            return
     backend = BACKENDS[model_name]
     if not backend.is_downloaded():
         yield None, f"El modelo {model_name} no está descargado (usar el botón Descargar)."
@@ -226,6 +243,14 @@ def transcribe(audio_path, language):
     if not WHISPER.is_downloaded():
         return "", "Whisper no está descargado (usar el botón Descargar)."
     try:
+        if limits.upload_too_large(os.path.getsize(audio_path)):
+            return "", f"Audio demasiado grande (max {limits.MODELBOX_MAX_UPLOAD_MB} MB)."
+    except OSError:
+        pass
+    msg = limits.audio_limit_error(audio_path)
+    if msg:
+        return "", msg
+    try:
         with inference.slot():
             result = WHISPER.transcribe(audio_path, language=language or None)
     except Exception as e:
@@ -242,23 +267,21 @@ def refresh_monitor():
 
 
 def _api_md():
-    """Guía de uso de la API, embebida en el panel."""
-    estado = ("🟢 **API activa** — el servidor tiene `API_TOKEN` configurado."
+    """Guia de uso de la API, embebida en el panel."""
+    estado = ("**API activa** - el servidor tiene `API_TOKEN` configurado."
               if API_ENABLED else
-              "🔴 **API desactivada** — el servidor NO tiene `API_TOKEN`. "
+              "**API desactivada** - el servidor NO tiene `API_TOKEN`. "
               "Configurar esa variable de entorno para habilitarla.")
-    incl_tts = ", ".join(MODEL_NAMES) or "— (ninguno en este build)"
-    incl_stt = WHISPER.name if WHISPER else "— (no incluido)"
+    incl_tts = ", ".join(MODEL_NAMES) or "- (ninguno en este build)"
+    incl_stt = WHISPER.name if WHISPER else "- (no incluido)"
     header = (
         f"## Usar Modelbox por API\n\n{estado}\n\n"
-        f"**Modelos en este build** — Voz (TTS): {incl_tts} · Transcripción (STT): {incl_stt}\n\n"
-        "**Precio actual:** USD 0 durante el periodo inicial de prueba. "
-        "Más adelante se definirá el precio definitivo.\n\n"
-        "Un modelo responde por API solo si está **descargado** *y* **habilitado** "
-        "(el toggle «Habilitar en la API» de cada pestaña). El token de la API se "
-        "configura en el servidor (env var `API_TOKEN`), no aquí.\n\n"
+        f"**Modelos en este build** - Voz (TTS): {incl_tts} - Transcripcion (STT): {incl_stt}\n\n"
+        "**Precio actual:** USD 0 durante el periodo inicial de prueba.\n\n"
+        "Hay dos superficies compatibles: `/api/*` nativa de Modelbox y `/v1/*` compatible con clientes OpenAI. "
+        "Ambas usan el mismo `API_TOKEN`; los endpoints `/v1/*` son wrappers aditivos, no reemplazan `/api/*`.\n\n"
     )
-    body = """### Autenticación
+    body = """### Autenticacion
 
 Todas las rutas protegidas requieren el header:
 
@@ -266,48 +289,57 @@ Todas las rutas protegidas requieren el header:
 Authorization: Bearer <API_TOKEN>
 ```
 
-### Endpoints
+### Endpoints nativos `/api/*`
 
-| Método | Ruta | Descripción |
+| Metodo | Ruta | Descripcion |
 |---|---|---|
-| GET | `/api/health` | Estado + cola + modelos (sin token) |
-| GET | `/api/pricing` | Precio actual: USD 0 en periodo inicial de prueba |
-| GET | `/api/models` | Modelos TTS y sus capacidades |
-| GET | `/api/usage` | Registro de llamadas + resumen (requiere token) |
-| POST | `/api/tts` | Genera voz (preset) → WAV |
-| POST | `/api/clone` | Clona voz desde un audio → WAV |
-| POST | `/api/transcribe` | Transcribe un audio → texto |
+| GET | `/api/health` | Estado + cola + limites + modelos (sin token) |
+| GET | `/api/pricing` | Precio actual: USD 0 |
+| GET | `/api/models` | Modelos TTS y capacidades |
+| GET | `/api/usage` | Registro de llamadas + resumen |
+| POST | `/api/tts` | Genera voz (preset) -> WAV |
+| POST | `/api/clone` | Clona voz desde audio -> WAV |
+| POST | `/api/transcribe` | Transcribe audio -> JSON |
 
-### Ejemplos
+### Endpoints OpenAI-compatible `/v1/*`
+
+| Metodo | Ruta | Descripcion |
+|---|---|---|
+| GET | `/v1/models` | Lista OpenAI-style de modelos descargados + habilitados |
+| POST | `/v1/audio/speech` | TTS OpenAI-compatible. Mapea `input` -> `text` y devuelve audio/wav |
+| POST | `/v1/audio/transcriptions` | STT OpenAI-compatible. Mapea `file` -> `audio` y devuelve `text`, `duration`, `language` |
+
+Errores en `/v1/*` usan shape OpenAI:
+
+```json
+{"error":{"message":"...","type":"invalid_request_error","code":"..."}}
+```
+
+### Limites activos
+
+Consultar `/api/health`, campo `limits`. Defaults del servicio:
+
+- `MODELBOX_MAX_TTS_CHARS=2000`
+- `MODELBOX_MAX_CLONE_CHARS=2000`
+- `MODELBOX_MAX_AUDIO_SECONDS=1200`
+- `MODELBOX_MAX_UPLOAD_MB=30`
+
+### Ejemplos OpenAI-compatible
 
 ```bash
-# Generar voz
-curl -X POST <host>/api/tts \
+# TTS compatible OpenAI
+curl -X POST <host>/v1/audio/speech \
   -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
-  -d '{"model":"Supertonic-3","text":"Hola mundo","voice":"F1","lang":"es"}' \
+  -d '{"model":"Pocket-TTS","input":"Hola mundo","voice":"alba"}' \
   --output salida.wav
 
-# Transcribir (multipart)
-curl -X POST <host>/api/transcribe \
+# STT compatible OpenAI: duration es obligatorio en la respuesta
+curl -X POST <host>/v1/audio/transcriptions \
   -H "Authorization: Bearer $API_TOKEN" \
-  -F "audio=@grabacion.mp3" -F "language=es"
-
-# Leer uso reciente
-curl <host>/api/usage?limit=100 \
-  -H "Authorization: Bearer $API_TOKEN"
+  -F "file=@grabacion.wav" -F "model=Whisper" -F "response_format=verbose_json" -F "language=es"
 ```
 
-```python
-import requests
-r = requests.post("<host>/api/tts",
-    headers={"Authorization": f"Bearer {TOKEN}"},
-    json={"model": "Supertonic-3", "text": "Hola", "voice": "F1", "lang": "es"})
-open("salida.wav", "wb").write(r.content)
-```
-
-El registro de uso se guarda en el volumen (`/modelbox-data/logs/calls.jsonl`) y no almacena texto ni audio crudo: solo métricas como tipo, modelo, caracteres, duración, espera de cola y estado HTTP.
-
-Docs interactivas (Swagger): **[/api/docs](/api/docs)** · estado: **[/api/health](/api/health)** · precio: **[/api/pricing](/api/pricing)**.
+Docs interactivas (Swagger): **[/api/docs](/api/docs)** - OpenAPI JSON: **[/api/openapi.json](/api/openapi.json)**.
 Reemplazar `<host>` por la URL de este servidor.
 """
     return header + body
