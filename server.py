@@ -32,6 +32,7 @@ from pydantic import BaseModel
 from app import demo
 from shared import inference, limits, state, usage
 from shared.backends import BACKENDS
+from shared.embeddings import EMBEDDERS
 from shared.paths import DATA_DIR, LOGS_DIR, OUTPUTS, POCKET_WEIGHTS, STATE_DIR, SUPERTONIC_DIR
 from shared.transcribe import TRANSCRIBERS
 
@@ -209,6 +210,20 @@ class OpenAISpeechRequest(BaseModel):
     response_format: str | None = None
 
 
+class EmbeddingsRequest(BaseModel):
+    model: str
+    input: str | list[str]
+    task: str | None = None          # "query" | "document" (default: document)
+    dimensions: int | None = None    # Matryoshka: 512/256/128 (default 768)
+
+
+class OpenAIEmbeddingsRequest(BaseModel):
+    model: str
+    input: str | list[str]
+    dimensions: int | None = None
+    encoding_format: str | None = None
+
+
 def _model_info(name, backend) -> dict:
     return {"name": name, "downloaded": backend.is_downloaded(),
             "enabled": state.is_enabled(name)}
@@ -246,7 +261,8 @@ def health():
                 "state": state.diagnostics(),
             },
             "models": [_model_info(n, b) for n, b in BACKENDS.items()],
-            "transcribers": [_model_info(n, t) for n, t in TRANSCRIBERS.items()]}
+            "transcribers": [_model_info(n, t) for n, t in TRANSCRIBERS.items()],
+            "embedders": [_model_info(n, e) for n, e in EMBEDDERS.items()]}
 
 
 @app.get("/api/pricing")
@@ -465,6 +481,55 @@ def transcribe(audio: UploadFile = File(...), language: str = Form(None),
     return _transcribe_upload(audio=audio, language=language, model=model, include_duration=False)
 
 
+@app.post("/api/embeddings", dependencies=[Depends(_require_token)])
+def embeddings(req: EmbeddingsRequest):
+    """Genera embeddings (texto -> vectores) para retrieval/RAG. No guarda nada."""
+    started_at = time.perf_counter()
+    slot_meta = None
+    error = None
+    inputs = [req.input] if isinstance(req.input, str) else list(req.input)
+    call = {
+        "id": usage.new_request_id(),
+        "type": "embeddings",
+        "model": req.model,
+        "items": len(inputs),
+        "text_chars": sum(len(t or "") for t in inputs),
+        "dimensions": req.dimensions,
+    }
+    try:
+        embedder = EMBEDDERS.get(req.model)
+        if embedder is None:
+            raise HTTPException(404, f"Modelo de embeddings desconocido: {req.model}")
+        if not inputs:
+            raise HTTPException(400, "Falta el texto de entrada.")
+        if len(inputs) > limits.MODELBOX_MAX_EMBED_ITEMS:
+            raise HTTPException(400, f"Demasiados textos ({len(inputs)}, max {limits.MODELBOX_MAX_EMBED_ITEMS}).")
+        for t in inputs:
+            _enforce_text_limit(t, limits.MODELBOX_MAX_EMBED_CHARS, "Texto de embeddings")
+        if not embedder.is_downloaded():
+            raise HTTPException(409, f"El modelo {req.model} no esta descargado.")
+        if not state.is_enabled(req.model):
+            raise HTTPException(403, f"El modelo {req.model} no esta habilitado para la API.")
+
+        task = "query" if (req.task or "").lower() == "query" else "document"
+        with inference.slot() as slot_meta:
+            vectors = embedder.embed(inputs, task=task, dimensions=req.dimensions)
+        return {
+            "model": req.model,
+            "task": task,
+            "dimensions": len(vectors[0]) if vectors else 0,
+            "embeddings": vectors,
+        }
+    except HTTPException as e:
+        error = e
+        raise
+    except Exception as e:
+        error = HTTPException(500, f"Error de embeddings: {e}")
+        raise error
+    finally:
+        _record_call(call, started_at, slot_meta, error)
+
+
 def _enabled_model_ids() -> list[str]:
     ids = []
     for name, backend in BACKENDS.items():
@@ -472,6 +537,9 @@ def _enabled_model_ids() -> list[str]:
             ids.append(name)
     for name, transcriber in TRANSCRIBERS.items():
         if transcriber.is_downloaded() and state.is_enabled(name):
+            ids.append(name)
+    for name, embedder in EMBEDDERS.items():
+        if embedder.is_downloaded() and state.is_enabled(name):
             ids.append(name)
     return ids
 
@@ -520,6 +588,31 @@ def v1_audio_transcriptions(file: UploadFile = File(...), model: str = Form(...)
         }
     except HTTPException as exc:
         raise _as_openai_exception(exc)
+
+
+@app.post("/v1/embeddings", dependencies=[Depends(_require_token_openai)])
+def v1_embeddings(req: OpenAIEmbeddingsRequest):
+    """OpenAI-compatible embeddings wrapper over /api/embeddings (task=document)."""
+    if req.encoding_format not in (None, "float"):
+        raise OpenAIHTTPException(
+            400, "encoding_format must be 'float'.",
+            "invalid_request_error", "invalid_encoding_format",
+        )
+    try:
+        result = embeddings(EmbeddingsRequest(
+            model=req.model, input=req.input, task="document", dimensions=req.dimensions,
+        ))
+    except HTTPException as exc:
+        raise _as_openai_exception(exc)
+    vectors = result["embeddings"]
+    texts = [req.input] if isinstance(req.input, str) else list(req.input)
+    approx_tokens = sum(len(t or "") for t in texts)  # aproximado (no exacto en tokens)
+    return {
+        "object": "list",
+        "data": [{"object": "embedding", "index": i, "embedding": v} for i, v in enumerate(vectors)],
+        "model": req.model,
+        "usage": {"prompt_tokens": approx_tokens, "total_tokens": approx_tokens},
+    }
 
 
 # Panel Gradio montado en la raíz. Con credenciales, exige login.

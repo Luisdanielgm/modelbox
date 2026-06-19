@@ -25,6 +25,7 @@ The native Modelbox API under `/api/*` remains available and unchanged. Use `/ap
 
    - `POST /v1/audio/speech` for TTS.
    - `POST /v1/audio/transcriptions` for STT.
+   - `POST /v1/embeddings` for embeddings (RAG).
    - `POST /api/clone` for voice cloning.
 
 ## Architecture decision
@@ -109,6 +110,7 @@ Native source of truth:
 
 - TTS backends: `shared.backends.BACKENDS`
 - STT backends: `shared.transcribe.TRANSCRIBERS`
+- Embedding backends: `shared.embeddings.EMBEDDERS`
 - enabled state: persisted Modelbox state in `/modelbox-data/state`
 
 ### Text to speech
@@ -178,6 +180,36 @@ Internal path:
 
 ```txt
 /v1/audio/transcriptions -> file mapped to audio -> shared transcribe implementation -> {text,duration,language}
+```
+
+### Embeddings
+
+```http
+POST /v1/embeddings
+Content-Type: application/json
+```
+
+Request:
+
+```json
+{ "model": "EmbeddingGemma", "input": ["text 1", "text 2"], "dimensions": 256 }
+```
+
+| OpenAI-compatible field | Native Modelbox field |
+|---|---|
+| `model` | `model` |
+| `input` (string or list of strings) | `input` |
+| `dimensions` | `dimensions` (Matryoshka 512/256/128; default 768) |
+| `encoding_format` | accepted only as `float` |
+
+Response (OpenAI shape): `{ "object": "list", "data": [ { "object": "embedding", "index": 0, "embedding": [ ... ] } ], "model": "...", "usage": { ... } }`.
+
+The `/v1/embeddings` wrapper always uses `task=document`. For query-side prompts use native `POST /api/embeddings` with `"task": "query"`.
+
+Internal path:
+
+```txt
+/v1/embeddings -> EmbeddingsRequest(model, input, task=document, dimensions) -> /api/embeddings logic
 ```
 
 ## Voice cloning
@@ -297,6 +329,7 @@ Relevant files:
 | `shared/usage.py` | JSONL usage log and summary |
 | `shared/backends.py` | TTS backends |
 | `shared/transcribe.py` | STT backend |
+| `shared/embeddings.py` | Embeddings backend (EmbeddingGemma ONNX) |
 | `docs/API.md` | full public API reference |
 | `docs/AGENT_INTEGRATION.md` | concise public agent guide served by `/api/agent-guide` |
 
@@ -306,6 +339,7 @@ Relevant files:
 - [ ] `GET /v1/models` returns OpenAI-style list.
 - [ ] `POST /v1/audio/speech` returns non-empty `audio/wav` bytes.
 - [ ] `POST /v1/audio/transcriptions` returns `text`, `duration`, and `language`.
+- [ ] `POST /v1/embeddings` returns `data[].embedding` with the requested `dimensions`.
 - [ ] `/v1/*` auth/validation errors return `error.message`.
 - [ ] `/api/clone` still works for voice cloning.
 - [ ] `/api/usage` records TTS, clone, and STT calls.

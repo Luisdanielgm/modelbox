@@ -38,20 +38,21 @@ servidor desde el repositorio (sin Docker Hub).
 
 ## Modelos incluidos
 
-| Modelo        | Tipo | Runtime          | RAM aprox.   | Clonación / Notas            |
-|---------------|------|------------------|--------------|------------------------------|
-| Supertonic-3  | TTS  | ONNX (CPU)       | <1 GB        | No (presets M1–M5, F1–F5)    |
-| Pocket-TTS    | TTS  | PyTorch (CPU)    | ~0.7–1.3 GB  | Sí (pesos gated — ver abajo) |
-| Qwen3-TTS     | TTS  | Transformers     | ~9.6 GB      | Sí (audio de referencia)     |
-| Whisper       | STT  | faster-whisper   | ~1 GB (small)| Transcribe mp3/ogg/m4a/wav…  |
+| Modelo         | Tipo  | Runtime          | RAM aprox.   | Clonación / Notas            |
+|----------------|-------|------------------|--------------|------------------------------|
+| Supertonic-3   | TTS   | ONNX (CPU)       | <1 GB        | No (presets M1–M5, F1–F5)    |
+| Pocket-TTS     | TTS   | PyTorch (CPU)    | ~0.7–1.3 GB  | Sí (pesos gated — ver abajo) |
+| Qwen3-TTS      | TTS   | Transformers     | ~9.6 GB      | Sí (audio de referencia)     |
+| Whisper        | STT   | faster-whisper   | ~1 GB (small)| Transcribe mp3/ogg/m4a/wav…  |
+| EmbeddingGemma | Embed | ONNX (CPU)       | ~0.5–1 GB    | Embeddings/RAG, multilingüe, **sin torch**, Matryoshka 768→128 |
 
 > **¿Poco RAM (VPS)?** Supertonic + Pocket + Whisper-small cargados a la vez
 > ocupan **~2.8 GB medidos** — entran holgados en 5–6 GB con margen para
 > concurrencia. Qwen necesita ~9.6 GB residentes él solo (no apto para VPS chico).
 
-Cada modelo declara sus capacidades en `shared/backends.py` (TTS) o
-`shared/transcribe.py` (STT); la interfaz muestra u oculta controles según el
-modelo activo. **Concurrencia:** en CPU las inferencias se serializan en una cola
+Cada modelo declara sus capacidades en `shared/backends.py` (TTS),
+`shared/transcribe.py` (STT) o `shared/embeddings.py` (embeddings); la interfaz
+muestra u oculta controles según el modelo activo. **Concurrencia:** en CPU las inferencias se serializan en una cola
 (una ya usa todos los cores); el resto espera turno, visible en el panel y en
 `/api/health`.
 
@@ -66,11 +67,13 @@ modelo activo. **Concurrencia:** en CPU las inferencias se serializan en una col
 ├─ shared/
 │  ├─ backends.py         # adaptadores TTS + capacidades
 │  ├─ transcribe.py       # backend STT (Whisper / faster-whisper)
+│  ├─ embeddings.py       # backend embeddings (EmbeddingGemma / ONNX)
 │  ├─ state.py            # descargas/habilitados + limpieza de audios
 │  ├─ paths.py            # rutas persistentes: local vs volumen unico /modelbox-data
+│  ├─ limits.py · usage.py  # límites de servicio + log de uso
 │  ├─ inference.py        # cola de concurrencia
 │  └─ monitor.py          # monitor de CPU/RAM/almacenamiento (psutil)
-├─ models/                # supertonic/ · pockettts/ · qwen3/ · whisper/
+├─ models/                # supertonic/ · pockettts/ · qwen3/ · whisper/ · embeddings/
 │  └─ <modelo>/           #   run.py · requirements.txt
 ├─ docs/API.md            # guía completa de la API
 └─ outputs/               # audios generados (se crea solo)
@@ -98,6 +101,7 @@ uv pip install -r requirements.txt                     # app (gradio + API)
 uv pip install -r models/supertonic/requirements.txt   # Supertonic (TTS, sin torch)
 uv pip install -r models/pockettts/requirements.txt    # Pocket-TTS (TTS, clonación)
 uv pip install -r models/whisper/requirements.txt      # Whisper (STT, sin torch)
+uv pip install -r models/embeddings/requirements.txt   # EmbeddingGemma (embeddings, sin torch)
 uv pip install -r models/qwen3/requirements.txt        # Qwen (TTS pesado, opcional)
 #   (con pip estándar, reemplazar "uv pip" por "pip")
 ```
@@ -158,6 +162,8 @@ Variables operativas (opcionales, con default):
 | `MODELBOX_MAX_CLONE_CHARS` | `2000` | Tope de caracteres para `/api/clone`. |
 | `MODELBOX_MAX_AUDIO_SECONDS` | `1200` | Tope de duracion para audios de clone/STT. |
 | `MODELBOX_MAX_UPLOAD_MB` | `30` | Tope de tamano para audios subidos por API. |
+| `MODELBOX_MAX_EMBED_CHARS` | `8000` | Tope de caracteres por texto en `/api/embeddings`. |
+| `MODELBOX_MAX_EMBED_ITEMS` | `64` | Tope de textos por lote en `/api/embeddings`. |
 | `MODELBOX_WHISPER_SIZE` | `small` | Tamano de Whisper: `small`/`medium`/`large-v3`. |
 | `MODELBOX_DATA_DIR` | *(vacio local, `/modelbox-data` en Docker)* | Directorio persistente unico. |
 
@@ -196,6 +202,16 @@ curl -X POST http://localhost:7860/v1/audio/transcriptions \
 # API nativa: uso/auditoria
 curl -H "Authorization: Bearer $API_TOKEN" \
   "http://localhost:7860/api/usage?limit=100"
+
+# Embeddings (RAG) - nativo: 'task' (document/query) y 'dimensions' (768/512/256/128) opcionales
+curl -X POST http://localhost:7860/api/embeddings \
+  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"model":"EmbeddingGemma","input":["texto 1","texto 2"],"task":"document","dimensions":256}'
+
+# Embeddings - OpenAI-compatible (sirve para clientes/SDKs de RAG existentes)
+curl -X POST http://localhost:7860/v1/embeddings \
+  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"model":"EmbeddingGemma","input":"que es modelbox","dimensions":256}'
 ```
 
 Para conocer voces/presets, idiomas y capacidades no uses `/v1/models`; ese endpoint se mantiene simple para compatibilidad OpenAI. Usar `GET /api/models` con token como fuente de verdad.
@@ -240,6 +256,9 @@ python models/qwen3/run.py --text "Hola" --ref_audio mi_voz.wav
 
 # Whisper — transcripción (STT)
 python models/whisper/run.py --audio grabacion.mp3 --lang es
+
+# EmbeddingGemma — embeddings (RAG)
+python models/embeddings/run.py --text "Hola mundo" --task document --dimensions 256
 ```
 
 Los audios se guardan en `outputs/`.

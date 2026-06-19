@@ -1,0 +1,7 @@
+# EmbeddingGemma (embeddings / retrieval) en ONNX. NO necesita torch.
+# Corre con onnxruntime + el tokenizer de transformers (tensores numpy).
+onnxruntime>=1.19.0
+transformers>=4.40.0
+sentencepiece>=0.1.99
+numpy>=1.21.0
+huggingface-hub>=0.10.0

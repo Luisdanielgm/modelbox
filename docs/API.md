@@ -36,6 +36,7 @@ Protected native endpoints:
 | POST | `/api/tts` | Native TTS, JSON -> audio/wav |
 | POST | `/api/clone` | Native voice clone, multipart -> audio/wav |
 | POST | `/api/transcribe` | Native STT, multipart -> `{text, language}` |
+| POST | `/api/embeddings` | Native embeddings, JSON -> `{embeddings, dimensions, task}` |
 
 Protected OpenAI-compatible endpoints:
 
@@ -44,6 +45,7 @@ Protected OpenAI-compatible endpoints:
 | GET | `/v1/models` | OpenAI-style model list: downloaded + enabled models only |
 | POST | `/v1/audio/speech` | OpenAI-compatible TTS wrapper over `/api/tts` |
 | POST | `/v1/audio/transcriptions` | OpenAI-compatible STT wrapper over `/api/transcribe` |
+| POST | `/v1/embeddings` | OpenAI-compatible embeddings wrapper over `/api/embeddings` |
 
 ## Current price
 
@@ -63,6 +65,8 @@ Default service limits:
 | `MODELBOX_MAX_TTS_CHARS` | `2000` | `/api/tts`, `/v1/audio/speech` | `400` |
 | `MODELBOX_MAX_CLONE_CHARS` | `2000` | `/api/clone` | `400` |
 | `MODELBOX_MAX_AUDIO_SECONDS` | `1200` | `/api/clone`, `/api/transcribe`, `/v1/audio/transcriptions` | `400` |
+| `MODELBOX_MAX_EMBED_CHARS` | `8000` | `/api/embeddings`, `/v1/embeddings` | `400` |
+| `MODELBOX_MAX_EMBED_ITEMS` | `64` | `/api/embeddings`, `/v1/embeddings` | `400` |
 | `MODELBOX_MAX_UPLOAD_MB` | `30` | upload endpoints | `413` |
 
 Example health shape:
@@ -223,9 +227,43 @@ curl -H "Authorization: Bearer $API_TOKEN" \
   "http://localhost:7860/api/usage?limit=100"
 ```
 
+### Native embeddings
+
+`input` accepts a string or a list of strings. `task` is `document` (default) or
+`query`. `dimensions` truncates the 768-d vector via Matryoshka (512/256/128) and
+re-normalizes.
+
+```bash
+curl -X POST http://localhost:7860/api/embeddings \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"EmbeddingGemma","input":["texto 1","texto 2"],"task":"document","dimensions":256}'
+# -> {"model":"EmbeddingGemma","task":"document","dimensions":256,"embeddings":[[...],[...]]}
+```
+
+### OpenAI-compatible embeddings
+
+Works with existing OpenAI clients/SDKs for RAG. Defaults to `task=document`.
+
+```bash
+curl -X POST http://localhost:7860/v1/embeddings \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"EmbeddingGemma","input":"que es modelbox","dimensions":256}'
+# -> {"object":"list","data":[{"object":"embedding","index":0,"embedding":[...]}],"model":"EmbeddingGemma","usage":{...}}
+```
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:7860/v1", api_key="<API_TOKEN>")
+r = client.embeddings.create(model="EmbeddingGemma", input=["doc 1", "doc 2"], dimensions=256)
+vectors = [d.embedding for d in r.data]
+```
+
 ## Native endpoint notes
 
 - `/api/tts` response is `audio/wav`.
 - `/api/clone` response is `audio/wav`.
 - `/api/transcribe` response is `{ "text": "...", "language": "es" }`.
+- `/api/embeddings` response is `{ "model", "task", "dimensions", "embeddings": [[...]] }`; nothing is stored.
 - `/api/usage` persists metadata in `/modelbox-data/logs/calls.jsonl`; it does not store raw text or audio.

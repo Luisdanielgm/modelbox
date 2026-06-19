@@ -2,12 +2,13 @@
 FROM python:3.11-slim
 
 # Qué modelos incluir en la imagen (sus librerías se instalan según esto).
-# Valores: combinación de supertonic,pocket,qwen,whisper separada por comas.
-#   - solo "supertonic"        -> imagen liviana, SIN torch
-#   - "supertonic,whisper"     -> agrega STT (faster-whisper), SIN torch
-#   - "supertonic,pocket"      -> agrega torch (CPU)
-#   - "...,qwen"               -> agrega transformers
-ARG MODELS="supertonic,pocket,qwen,whisper"
+# Valores: combinación de supertonic,pocket,qwen,whisper,embeddings separada por comas.
+#   - solo "supertonic"            -> imagen liviana, SIN torch
+#   - "supertonic,whisper"         -> agrega STT (faster-whisper), SIN torch
+#   - "supertonic,embeddings"      -> agrega embeddings (EmbeddingGemma ONNX), SIN torch
+#   - "supertonic,pocket"          -> agrega torch (CPU)
+#   - "...,qwen"                   -> agrega transformers
+ARG MODELS="supertonic,pocket,qwen,whisper,embeddings"
 
 # Dependencias de sistema: libsndfile (soundfile) y ffmpeg/ffprobe.
 # Aunque Qwen es el caso mas obvio, Gradio/audio puede invocar ffprobe tambien
@@ -24,6 +25,7 @@ COPY models/supertonic/requirements.txt models/supertonic/
 COPY models/pockettts/requirements.txt models/pockettts/
 COPY models/qwen3/requirements.txt models/qwen3/
 COPY models/whisper/requirements.txt models/whisper/
+COPY models/embeddings/requirements.txt models/embeddings/
 
 # PyTorch CPU (desde el índice CPU, evita las libs CUDA ~2 GB) SOLO si se
 # incluye un modelo que lo usa (pocket o qwen). Luego las deps de la app y de
@@ -40,7 +42,9 @@ RUN if echo ",$MODELS," | grep -qE ",(pocket|qwen),"; then \
     && if echo ",$MODELS," | grep -q ",qwen,"; then \
          pip install --no-cache-dir -r models/qwen3/requirements.txt; fi \
     && if echo ",$MODELS," | grep -q ",whisper,"; then \
-         pip install --no-cache-dir -r models/whisper/requirements.txt; fi
+         pip install --no-cache-dir -r models/whisper/requirements.txt; fi \
+    && if echo ",$MODELS," | grep -q ",embeddings,"; then \
+         pip install --no-cache-dir -r models/embeddings/requirements.txt; fi
 
 # Código de la app.
 COPY . .

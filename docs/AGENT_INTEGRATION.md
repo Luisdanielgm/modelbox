@@ -20,6 +20,7 @@ If your client already supports the OpenAI API shape, use `/v1/*`:
 3. Use:
    - `POST /v1/audio/speech` for TTS.
    - `POST /v1/audio/transcriptions` for STT.
+   - `POST /v1/embeddings` for embeddings (RAG).
 4. Handle OpenAI-shaped errors from `/v1/*`.
 
 Current price: **USD 0** during the initial trial period. Use `/api/pricing` to read the active pricing object.
@@ -111,6 +112,24 @@ Response:
 `duration` is mandatory and is measured from the uploaded audio in seconds.
 Use it for per-second billing/accounting.
 
+### `POST /v1/embeddings`
+
+JSON body:
+
+```json
+{ "model": "EmbeddingGemma", "input": ["text 1", "text 2"], "dimensions": 256 }
+```
+
+Response (OpenAI shape):
+
+```json
+{ "object": "list", "data": [ { "object": "embedding", "index": 0, "embedding": [ ... ] } ], "model": "EmbeddingGemma", "usage": { ... } }
+```
+
+`input` is a string or a list of strings. `dimensions` truncates via Matryoshka
+(512/256/128; default 768). This wrapper uses `task=document`; for query-side
+prompts use native `/api/embeddings` with `"task": "query"`.
+
 ## OpenAI error shape
 
 All non-2xx `/v1/*` responses use:
@@ -138,6 +157,7 @@ Use these when you need Modelbox-specific features like voice cloning or usage a
 | POST | `/api/tts` | Native TTS -> WAV |
 | POST | `/api/clone` | Voice clone -> WAV |
 | POST | `/api/transcribe` | Native STT -> `{text, language}` |
+| POST | `/api/embeddings` | Text -> vectors (RAG); supports `task` and `dimensions` |
 
 ## Usage audit
 
@@ -153,6 +173,8 @@ Read active limits from `GET /api/health`, field `limits`. Current service defau
 - `MODELBOX_MAX_CLONE_CHARS=2000` for `/api/clone`.
 - `MODELBOX_MAX_AUDIO_SECONDS=1200` for uploaded clone/STT audio.
 - `MODELBOX_MAX_UPLOAD_MB=30` for uploaded clone/STT audio.
+- `MODELBOX_MAX_EMBED_CHARS=8000` per text in `/api/embeddings`.
+- `MODELBOX_MAX_EMBED_ITEMS=64` texts per batch in `/api/embeddings`.
 
 If text/audio duration is too large, Modelbox returns `400`. If the uploaded file is too large, it returns `413`.
 
@@ -188,4 +210,13 @@ curl -f -X POST "$MODELBOX_URL/api/clone" \
   -F "text=Hola con voz clonada" \
   -F "ref_audio=@reference.wav" \
   --output clone.wav
+```
+
+### Embeddings (RAG)
+
+```bash
+curl -f -X POST "$MODELBOX_URL/v1/embeddings" \
+  -H "Authorization: Bearer $MODELBOX_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"EmbeddingGemma","input":["doc 1","doc 2"],"dimensions":256}'
 ```

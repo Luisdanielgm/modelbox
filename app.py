@@ -11,6 +11,7 @@ import gradio as gr
 
 from shared import inference, limits, monitor, state
 from shared.backends import BACKENDS
+from shared.embeddings import EMBEDDERS
 from shared.paths import OUTPUTS
 from shared.transcribe import TRANSCRIBERS
 
@@ -35,6 +36,8 @@ MODEL_NAMES = list(BACKENDS.keys())
 DEFAULT_MODEL = MODEL_NAMES[0] if MODEL_NAMES else None
 WHISPER = next(iter(TRANSCRIBERS.values()), None)
 WHISPER_NAME = WHISPER.name if WHISPER else None
+EMBEDDER = next(iter(EMBEDDERS.values()), None)
+EMBEDDER_NAME = EMBEDDER.name if EMBEDDER else None
 API_ENABLED = bool(os.environ.get("API_TOKEN"))
 
 
@@ -258,6 +261,65 @@ def transcribe(audio_path, language):
     return result["text"], f"Listo (idioma: {result['language']})"
 
 
+# --- Embeddings (retrieval / RAG) ---
+def _emb_status_md():
+    if not EMBEDDER:
+        return "_Embeddings no incluido en este build._"
+    dl = "✅ descargado" if EMBEDDER.is_downloaded() else "⬇️ no descargado"
+    en = "🔓 habilitado en API" if state.is_enabled(EMBEDDER_NAME) else "🔒 deshabilitado en API"
+    return f"**{EMBEDDER.name}** ({EMBEDDER.dims}-d, ONNX, sin torch): {dl} · {en}"
+
+
+def do_download_embed():
+    try:
+        EMBEDDER.download()
+        msg = f"Listo: {EMBEDDER.name} descargado."
+    except Exception as e:
+        return _emb_status_md(), gr.update(), gr.update(), f"Error al descargar: {_friendly_error(e)}"
+    return _emb_status_md(), gr.update(visible=False), gr.update(interactive=True), msg
+
+
+def set_enable_embed(value):
+    state.set_enabled(EMBEDDER_NAME, bool(value))
+    return _emb_status_md()
+
+
+def on_embed_load():
+    dl = EMBEDDER.is_downloaded()
+    return (
+        _emb_status_md(),
+        gr.update(visible=not dl),
+        gr.update(value=state.is_enabled(EMBEDDER_NAME)),
+        gr.update(interactive=dl),
+    )
+
+
+def do_embed(text, task, dimensions):
+    if not EMBEDDER:
+        return "", "Embeddings no incluido en este build."
+    if not text or not text.strip():
+        return "", "Falta el texto."
+    if not EMBEDDER.is_downloaded():
+        return "", "EmbeddingGemma no está descargado (usar el botón Descargar)."
+    items = [ln for ln in text.splitlines() if ln.strip()] or [text]
+    if len(items) > limits.MODELBOX_MAX_EMBED_ITEMS:
+        return "", f"Demasiados textos ({len(items)}, max {limits.MODELBOX_MAX_EMBED_ITEMS})."
+    for t in items:
+        msg = limits.text_limit_error(t, limits.MODELBOX_MAX_EMBED_CHARS, "Texto de embeddings")
+        if msg:
+            return "", msg
+    dims = int(dimensions) if dimensions else None
+    try:
+        with inference.slot():
+            vecs = EMBEDDER.embed(items, task=task, dimensions=dims)
+    except Exception as e:
+        return "", f"Error: {_friendly_error(e)}"
+    d = len(vecs[0]) if vecs else 0
+    preview = [round(x, 4) for x in (vecs[0][:8] if vecs else [])]
+    out = f"{len(vecs)} vector(es) de {d} dims. Primer vector (8 de {d}): {preview}"
+    return out, f"Listo ({len(vecs)} embeddings, {d}-d)"
+
+
 def refresh_monitor():
     md = monitor.format_markdown(monitor.snapshot(OUTPUTS))
     q = inference.status()
@@ -274,9 +336,11 @@ def _api_md():
               "Configurar esa variable de entorno para habilitarla.")
     incl_tts = ", ".join(MODEL_NAMES) or "- (ninguno en este build)"
     incl_stt = WHISPER.name if WHISPER else "- (no incluido)"
+    incl_emb = EMBEDDER.name if EMBEDDER else "- (no incluido)"
     header = (
         f"## Usar Modelbox por API\n\n{estado}\n\n"
-        f"**Modelos en este build** - Voz (TTS): {incl_tts} - Transcripcion (STT): {incl_stt}\n\n"
+        f"**Modelos en este build** - Voz (TTS): {incl_tts} - Transcripcion (STT): {incl_stt} "
+        f"- Embeddings: {incl_emb}\n\n"
         "**Precio actual:** USD 0 durante el periodo inicial de prueba.\n\n"
         "Hay dos superficies compatibles: `/api/*` nativa de Modelbox y `/v1/*` compatible con clientes OpenAI. "
         "Ambas usan el mismo `API_TOKEN`; los endpoints `/v1/*` son wrappers aditivos, no reemplazan `/api/*`.\n\n"
@@ -300,6 +364,7 @@ Authorization: Bearer <API_TOKEN>
 | POST | `/api/tts` | Genera voz (preset) -> WAV |
 | POST | `/api/clone` | Clona voz desde audio -> WAV |
 | POST | `/api/transcribe` | Transcribe audio -> JSON |
+| POST | `/api/embeddings` | Texto -> vectores (RAG); soporta `task` y `dimensions` |
 
 ### Endpoints OpenAI-compatible `/v1/*`
 
@@ -308,6 +373,7 @@ Authorization: Bearer <API_TOKEN>
 | GET | `/v1/models` | Lista OpenAI-style de modelos descargados + habilitados |
 | POST | `/v1/audio/speech` | TTS OpenAI-compatible. Mapea `input` -> `text` y devuelve audio/wav |
 | POST | `/v1/audio/transcriptions` | STT OpenAI-compatible. Mapea `file` -> `audio` y devuelve `text`, `duration`, `language` |
+| POST | `/v1/embeddings` | Embeddings OpenAI-compatible (`input`, `dimensions`) -> `data[].embedding` |
 
 Errores en `/v1/*` usan shape OpenAI:
 
@@ -418,6 +484,27 @@ with gr.Blocks(title="Modelbox") as demo:
                         tr_text_out = gr.Textbox(label="Transcripción", lines=4)
                         tr_msg = gr.Markdown("")
 
+                if EMBEDDER:
+                    with gr.Tab("Embeddings") as emb_tab:
+                        emb_status = gr.Markdown(_emb_status_md())
+                        with gr.Row():
+                            emb_download_btn = gr.Button("Descargar EmbeddingGemma",
+                                                         visible=not EMBEDDER.is_downloaded())
+                            emb_enable_cb = gr.Checkbox(
+                                label="Habilitar en la API",
+                                info="Permite consumir por /api/embeddings y /v1/embeddings (requiere API_TOKEN).",
+                                value=state.is_enabled(EMBEDDER_NAME))
+                        emb_text_in = gr.Textbox(label="Texto (uno por línea para procesar en lote)", lines=4,
+                                                 placeholder="Texto a embeddear...")
+                        with gr.Row():
+                            emb_task_in = gr.Dropdown(["document", "query"], value="document", label="Tarea")
+                            emb_dims_in = gr.Dropdown(["768", "512", "256", "128"], value="768",
+                                                      label="Dimensiones (Matryoshka)")
+                        emb_btn = gr.Button("Generar embeddings", variant="primary",
+                                            interactive=EMBEDDER.is_downloaded())
+                        emb_out = gr.Textbox(label="Resultado", lines=3)
+                        emb_msg = gr.Markdown("")
+
                 with gr.Tab("API"):
                     gr.Markdown(_api_md())
 
@@ -449,6 +536,15 @@ with gr.Blocks(title="Modelbox") as demo:
                               outputs=[tr_status, tr_download_btn, tr_btn, tr_msg])
         tr_enable_cb.change(set_enable_whisper, inputs=tr_enable_cb, outputs=tr_status)
         tr_btn.click(transcribe, inputs=[tr_audio_in, tr_lang_in], outputs=[tr_text_out, tr_msg])
+
+    if EMBEDDER:
+        embed_state_outputs = [emb_status, emb_download_btn, emb_enable_cb, emb_btn]
+        demo.load(on_embed_load, outputs=embed_state_outputs)
+        emb_tab.select(on_embed_load, outputs=embed_state_outputs)
+        emb_download_btn.click(do_download_embed,
+                               outputs=[emb_status, emb_download_btn, emb_btn, emb_msg])
+        emb_enable_cb.change(set_enable_embed, inputs=emb_enable_cb, outputs=emb_status)
+        emb_btn.click(do_embed, inputs=[emb_text_in, emb_task_in, emb_dims_in], outputs=[emb_out, emb_msg])
 
     timer.tick(refresh_monitor, outputs=mon_md)
 

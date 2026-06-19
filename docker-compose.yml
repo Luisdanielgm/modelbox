@@ -5,7 +5,7 @@ services:
       args:
         # Que modelos incluir en la imagen. En Dokploy se setea como build arg.
         # Ej.: "supertonic,pocket,whisper" deja una imagen sin Qwen/transformers.
-        MODELS: ${MODELS:-supertonic,pocket,qwen,whisper}
+        MODELS: ${MODELS:-supertonic,pocket,qwen,whisper,embeddings}
     image: modelbox:latest
     container_name: modelbox
     ports:

@@ -21,6 +21,8 @@ MODELBOX_MAX_UPLOAD_MB = _env_int("MODELBOX_MAX_UPLOAD_MB", 30)
 MODELBOX_MAX_TTS_CHARS = _env_int("MODELBOX_MAX_TTS_CHARS", 2000)
 MODELBOX_MAX_CLONE_CHARS = _env_int("MODELBOX_MAX_CLONE_CHARS", 2000)
 MODELBOX_MAX_AUDIO_SECONDS = _env_int("MODELBOX_MAX_AUDIO_SECONDS", 1200)
+MODELBOX_MAX_EMBED_CHARS = _env_int("MODELBOX_MAX_EMBED_CHARS", 8000)
+MODELBOX_MAX_EMBED_ITEMS = _env_int("MODELBOX_MAX_EMBED_ITEMS", 64)
 
 
 def text_chars(text: str | None) -> int:
@@ -88,4 +90,6 @@ def public_limits() -> dict:
         "max_tts_chars": MODELBOX_MAX_TTS_CHARS,
         "max_clone_chars": MODELBOX_MAX_CLONE_CHARS,
         "max_audio_seconds": MODELBOX_MAX_AUDIO_SECONDS,
+        "max_embed_chars": MODELBOX_MAX_EMBED_CHARS,
+        "max_embed_items": MODELBOX_MAX_EMBED_ITEMS,
     }
