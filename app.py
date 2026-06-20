@@ -389,6 +389,12 @@ Consultar `/api/health`, campo `limits`. Defaults del servicio:
 - `MODELBOX_MAX_CLONE_CHARS=2000`
 - `MODELBOX_MAX_AUDIO_SECONDS=1200`
 - `MODELBOX_MAX_UPLOAD_MB=30`
+- `MODELBOX_MAX_EMBED_CHARS=8000` / `MODELBOX_MAX_EMBED_ITEMS=64`
+
+**Embeddings — chunking obligatorio para textos largos:** cada texto se procesa
+hasta **~2048 tokens** (contexto de EmbeddingGemma). Texto más largo se trunca.
+Para documentos largos, dividirlos en chunks y mandar cada uno como ítem de
+`input` (un vector por chunk). Modelbox no chunkea; lo hace el consumidor.
 
 ### Ejemplos OpenAI-compatible
 
@@ -494,6 +500,11 @@ with gr.Blocks(title="Modelbox") as demo:
                                 label="Habilitar en la API",
                                 info="Permite consumir por /api/embeddings y /v1/embeddings (requiere API_TOKEN).",
                                 value=state.is_enabled(EMBEDDER_NAME))
+                        gr.Markdown(
+                            "**Límite ~2048 tokens por texto** (tope 8000 chars · máx 64 por lote). "
+                            "Texto más largo se trunca → para documentos largos, chunkealos "
+                            "(un texto por línea = un vector). La salida siempre es un vector de "
+                            "tamaño fijo (768, o el de `dimensions`).")
                         emb_text_in = gr.Textbox(label="Texto (uno por línea para procesar en lote)", lines=4,
                                                  placeholder="Texto a embeddear...")
                         with gr.Row():

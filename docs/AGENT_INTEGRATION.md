@@ -130,6 +130,11 @@ Response (OpenAI shape):
 (512/256/128; default 768). This wrapper uses `task=document`; for query-side
 prompts use native `/api/embeddings` with `"task": "query"`.
 
+**Per-text limit — chunk long documents.** Each text is processed up to **~2048
+tokens** (EmbeddingGemma's context; hard cap 8000 chars, max 64 texts per call).
+Longer text is **truncated**. Split long documents into chunks and send each chunk
+as an `input` item (one vector per chunk). Chunking is the caller's responsibility.
+
 ## OpenAI error shape
 
 All non-2xx `/v1/*` responses use:

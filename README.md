@@ -214,6 +214,13 @@ curl -X POST http://localhost:7860/v1/embeddings \
   -d '{"model":"EmbeddingGemma","input":"que es modelbox","dimensions":256}'
 ```
 
+> **Embeddings — límite por texto y chunking.** Cada texto se procesa hasta **~2048 tokens**
+> (el contexto de EmbeddingGemma; tope duro `MODELBOX_MAX_EMBED_CHARS=8000` chars, máx
+> `MODELBOX_MAX_EMBED_ITEMS=64` textos por llamada). Texto más largo se **trunca** (se
+> pierde la cola). Para documentos largos, **dividirlos en chunks** y mandar cada chunk
+> como un ítem de `input` (un vector por chunk). El chunking lo hace el consumidor —
+> Modelbox no chunkea. La salida siempre es un vector de tamaño fijo (768, o lo que pidas en `dimensions`).
+
 Para conocer voces/presets, idiomas y capacidades no uses `/v1/models`; ese endpoint se mantiene simple para compatibilidad OpenAI. Usar `GET /api/models` con token como fuente de verdad.
 
 Ejemplo Supertonic por `/v1/audio/speech`:

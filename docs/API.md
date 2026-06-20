@@ -233,6 +233,13 @@ curl -H "Authorization: Bearer $API_TOKEN" \
 `query`. `dimensions` truncates the 768-d vector via Matryoshka (512/256/128) and
 re-normalizes.
 
+> **Per-text limit — chunk long documents.** Each input text is processed up to
+> **~2048 tokens** (EmbeddingGemma's context; hard cap `MODELBOX_MAX_EMBED_CHARS=8000`
+> chars, max `MODELBOX_MAX_EMBED_ITEMS=64` texts per call). Text longer than the
+> context is **truncated** (the tail is lost). For long documents, **split them into
+> chunks** and send each chunk as an `input` item (you get one vector per chunk).
+> Chunking is the caller's responsibility — Modelbox does not chunk.
+
 ```bash
 curl -X POST http://localhost:7860/api/embeddings \
   -H "Authorization: Bearer $API_TOKEN" \

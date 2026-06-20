@@ -206,6 +206,8 @@ Response (OpenAI shape): `{ "object": "list", "data": [ { "object": "embedding",
 
 The `/v1/embeddings` wrapper always uses `task=document`. For query-side prompts use native `POST /api/embeddings` with `"task": "query"`.
 
+**Per-text limit — chunk long documents.** Each text is processed up to **~2048 tokens** (EmbeddingGemma's context; hard cap 8000 chars, max 64 texts per call). Longer text is **truncated** (the tail is lost). Split long documents into chunks and send each chunk as an `input` item (one vector per chunk). Modelbox does not chunk.
+
 Internal path:
 
 ```txt
