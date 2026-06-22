@@ -6,10 +6,11 @@ transcripción, una pestaña que explica cómo usar la API, y monitor de recurso
 """
 import logging
 import os
+import time
 
 import gradio as gr
 
-from shared import inference, limits, monitor, state
+from shared import inference, limits, monitor, state, usage
 from shared.backends import BACKENDS
 from shared.embeddings import EMBEDDERS
 from shared.paths import OUTPUTS
@@ -52,6 +53,25 @@ def _friendly_error(e):
     if "gated" in low or "401" in low or "unauthorized" in low or "login" in low:
         return "Faltan los pesos/credenciales gated de Hugging Face para este modelo."
     return s
+
+
+def _log_panel(call_type, model, started_at, success, status_code, error=None, **extra):
+    """Registra una llamada del panel en el mismo log de uso que la API.
+    Best-effort: nunca debe romper la interacción del usuario."""
+    try:
+        usage.append_call({
+            "id": usage.new_request_id(),
+            "type": call_type,
+            "surface": "panel",
+            "model": model,
+            "duration_seconds": round(time.perf_counter() - started_at, 4),
+            "status_code": status_code,
+            "success": success,
+            "error": error,
+            **extra,
+        })
+    except Exception:
+        pass
 
 
 def _status_md(model_name):
@@ -125,84 +145,103 @@ def set_enable(model_name, value):
 
 
 def generate(model_name, text, voice, lang, speed, steps, ref_audio, ref_text):
-    if not text or not text.strip():
-        yield None, "Falta el texto a sintetizar."
-        return
-    max_chars = limits.MODELBOX_MAX_CLONE_CHARS if ref_audio else limits.MODELBOX_MAX_TTS_CHARS
-    label = "Texto de clonacion" if ref_audio else "Texto TTS"
-    msg = limits.text_limit_error(text, max_chars, label)
-    if msg:
-        yield None, msg
-        return
-    if ref_audio:
-        try:
-            if limits.upload_too_large(os.path.getsize(ref_audio)):
-                yield None, f"Audio demasiado grande (max {limits.MODELBOX_MAX_UPLOAD_MB} MB)."
-                return
-        except OSError:
-            pass
-        msg = limits.audio_limit_error(ref_audio)
+    started_at = time.perf_counter()
+    call_type = "clone" if ref_audio else "tts"
+    outcome = {"success": False, "status_code": 400, "error": None}
+    try:
+        if not text or not text.strip():
+            outcome["error"] = "Falta el texto a sintetizar."
+            yield None, outcome["error"]
+            return
+        max_chars = limits.MODELBOX_MAX_CLONE_CHARS if ref_audio else limits.MODELBOX_MAX_TTS_CHARS
+        label = "Texto de clonacion" if ref_audio else "Texto TTS"
+        msg = limits.text_limit_error(text, max_chars, label)
         if msg:
+            outcome["error"] = msg
             yield None, msg
             return
-    backend = BACKENDS[model_name]
-    if not backend.is_downloaded():
-        yield None, f"El modelo {model_name} no está descargado (usar el botón Descargar)."
-        return
-    caps = backend.capabilities
-    opts = {}
-    if caps["presets"]:
-        opts["voice"] = voice
-    if caps["languages"]:
-        opts["lang"] = lang
-    if caps["has_speed"]:
-        opts["speed"] = speed
-    if caps["has_steps"]:
-        opts["steps"] = steps
-    if getattr(backend, "key", None) == "pocket" and ref_audio and not caps["clone"]:
-        yield None, "La clonacion de Pocket requiere /modelbox-data/pocket-weights/model.safetensors."
-        return
-    if caps["clone"]:
-        opts["ref_audio"] = ref_audio
-    if caps["ref_text"]:
-        opts["ref_text"] = ref_text or None
-    # Aviso de cola: si no hay turno libre, otra inferencia está corriendo.
-    q = inference.status()
-    if q["active"] >= q["max_concurrent"]:
-        yield None, f"En cola, esperando turno… ({q['waiting']} adelante)"
-    try:
-        # Streaming solo si el modelo corre en GPU (rápido > realtime); en CPU
-        # se atasca, así que ahí generamos todo y reproducimos al final.
-        stream = hasattr(backend, "synthesize_stream") and backend.uses_gpu()
-        if stream:
-            import numpy as np
-            # Pre-buffer ~3s antes de reproducir y luego mandar bloques de ~6s.
-            sr = None
-            acc, acc_len, started = [], 0, False
-            preroll = block = 0
-            with inference.slot():
-                for s, chunk in backend.synthesize_stream(text, **opts):
-                    sr = s
-                    if not preroll:
-                        preroll, block = int(3.0 * sr), int(6.0 * sr)
-                    acc.append(chunk)
-                    acc_len += len(chunk)
-                    if acc_len >= (block if started else preroll):
+        if ref_audio:
+            try:
+                if limits.upload_too_large(os.path.getsize(ref_audio)):
+                    outcome["error"] = f"Audio demasiado grande (max {limits.MODELBOX_MAX_UPLOAD_MB} MB)."
+                    yield None, outcome["error"]
+                    return
+            except OSError:
+                pass
+            msg = limits.audio_limit_error(ref_audio)
+            if msg:
+                outcome["error"] = msg
+                yield None, msg
+                return
+        backend = BACKENDS[model_name]
+        if not backend.is_downloaded():
+            outcome["status_code"] = 409
+            outcome["error"] = f"El modelo {model_name} no está descargado (usar el botón Descargar)."
+            yield None, outcome["error"]
+            return
+        caps = backend.capabilities
+        opts = {}
+        if caps["presets"]:
+            opts["voice"] = voice
+        if caps["languages"]:
+            opts["lang"] = lang
+        if caps["has_speed"]:
+            opts["speed"] = speed
+        if caps["has_steps"]:
+            opts["steps"] = steps
+        if getattr(backend, "key", None) == "pocket" and ref_audio and not caps["clone"]:
+            outcome["error"] = "La clonacion de Pocket requiere /modelbox-data/pocket-weights/model.safetensors."
+            yield None, outcome["error"]
+            return
+        if caps["clone"]:
+            opts["ref_audio"] = ref_audio
+        if caps["ref_text"]:
+            opts["ref_text"] = ref_text or None
+        # Aviso de cola: si no hay turno libre, otra inferencia está corriendo.
+        q = inference.status()
+        if q["active"] >= q["max_concurrent"]:
+            yield None, f"En cola, esperando turno… ({q['waiting']} adelante)"
+        try:
+            # Streaming solo si el modelo corre en GPU (rápido > realtime); en CPU
+            # se atasca, así que ahí generamos todo y reproducimos al final.
+            stream = hasattr(backend, "synthesize_stream") and backend.uses_gpu()
+            if stream:
+                import numpy as np
+                # Pre-buffer ~3s antes de reproducir y luego mandar bloques de ~6s.
+                sr = None
+                acc, acc_len, started = [], 0, False
+                preroll = block = 0
+                with inference.slot():
+                    for s, chunk in backend.synthesize_stream(text, **opts):
+                        sr = s
+                        if not preroll:
+                            preroll, block = int(3.0 * sr), int(6.0 * sr)
+                        acc.append(chunk)
+                        acc_len += len(chunk)
+                        if acc_len >= (block if started else preroll):
+                            yield (sr, np.concatenate(acc)), "Generando…"
+                            acc, acc_len, started = [], 0, True
+                    if acc:
                         yield (sr, np.concatenate(acc)), "Generando…"
-                        acc, acc_len, started = [], 0, True
-                if acc:
-                    yield (sr, np.concatenate(acc)), "Generando…"
-            state.cleanup_outputs()
-            yield gr.update(), "Listo"
-        else:
-            import soundfile as sf
-            with inference.slot():
-                path = backend.synthesize(text, **opts)
-            data, sr = sf.read(path, dtype="float32")
-            state.cleanup_outputs()
-            yield (sr, data), f"Listo: {os.path.basename(path)}"
-    except Exception as e:
-        yield None, f"Error: {_friendly_error(e)}"
+                state.cleanup_outputs()
+                outcome["success"], outcome["status_code"] = True, 200
+                yield gr.update(), "Listo"
+            else:
+                import soundfile as sf
+                with inference.slot():
+                    path = backend.synthesize(text, **opts)
+                data, sr = sf.read(path, dtype="float32")
+                state.cleanup_outputs()
+                outcome["success"], outcome["status_code"] = True, 200
+                yield (sr, data), f"Listo: {os.path.basename(path)}"
+        except Exception as e:
+            outcome["status_code"] = 500
+            outcome["error"] = _friendly_error(e)
+            yield None, f"Error: {outcome['error']}"
+    finally:
+        _log_panel(call_type, model_name, started_at, outcome["success"],
+                   outcome["status_code"], outcome["error"],
+                   voice=voice, lang=lang, text_chars=len(text or ""))
 
 
 # --- Transcripción (STT) ---
@@ -241,24 +280,40 @@ def on_whisper_load():
 def transcribe(audio_path, language):
     if not WHISPER:
         return "", "Whisper no está incluido en este build."
-    if not audio_path:
-        return "", "Falta el audio (subir o grabar uno)."
-    if not WHISPER.is_downloaded():
-        return "", "Whisper no está descargado (usar el botón Descargar)."
+    started_at = time.perf_counter()
+    outcome = {"success": False, "status_code": 400, "error": None, "text_chars": 0}
     try:
-        if limits.upload_too_large(os.path.getsize(audio_path)):
-            return "", f"Audio demasiado grande (max {limits.MODELBOX_MAX_UPLOAD_MB} MB)."
-    except OSError:
-        pass
-    msg = limits.audio_limit_error(audio_path)
-    if msg:
-        return "", msg
-    try:
-        with inference.slot():
-            result = WHISPER.transcribe(audio_path, language=language or None)
-    except Exception as e:
-        return "", f"Error: {_friendly_error(e)}"
-    return result["text"], f"Listo (idioma: {result['language']})"
+        if not audio_path:
+            outcome["error"] = "Falta el audio (subir o grabar uno)."
+            return "", outcome["error"]
+        if not WHISPER.is_downloaded():
+            outcome["status_code"] = 409
+            outcome["error"] = "Whisper no está descargado (usar el botón Descargar)."
+            return "", outcome["error"]
+        try:
+            if limits.upload_too_large(os.path.getsize(audio_path)):
+                outcome["error"] = f"Audio demasiado grande (max {limits.MODELBOX_MAX_UPLOAD_MB} MB)."
+                return "", outcome["error"]
+        except OSError:
+            pass
+        msg = limits.audio_limit_error(audio_path)
+        if msg:
+            outcome["error"] = msg
+            return "", msg
+        try:
+            with inference.slot():
+                result = WHISPER.transcribe(audio_path, language=language or None)
+        except Exception as e:
+            outcome["status_code"] = 500
+            outcome["error"] = _friendly_error(e)
+            return "", f"Error: {outcome['error']}"
+        outcome["success"], outcome["status_code"] = True, 200
+        outcome["text_chars"] = len(result.get("text") or "")
+        return result["text"], f"Listo (idioma: {result['language']})"
+    finally:
+        _log_panel("transcribe", WHISPER_NAME, started_at, outcome["success"],
+                   outcome["status_code"], outcome["error"],
+                   lang=language or None, text_chars=outcome["text_chars"])
 
 
 # --- Embeddings (retrieval / RAG) ---
@@ -297,27 +352,45 @@ def on_embed_load():
 def do_embed(text, task, dimensions):
     if not EMBEDDER:
         return "", "Embeddings no incluido en este build."
-    if not text or not text.strip():
-        return "", "Falta el texto."
-    if not EMBEDDER.is_downloaded():
-        return "", "EmbeddingGemma no está descargado (usar el botón Descargar)."
-    items = [ln for ln in text.splitlines() if ln.strip()] or [text]
-    if len(items) > limits.MODELBOX_MAX_EMBED_ITEMS:
-        return "", f"Demasiados textos ({len(items)}, max {limits.MODELBOX_MAX_EMBED_ITEMS})."
-    for t in items:
-        msg = limits.text_limit_error(t, limits.MODELBOX_MAX_EMBED_CHARS, "Texto de embeddings")
-        if msg:
-            return "", msg
-    dims = int(dimensions) if dimensions else None
+    started_at = time.perf_counter()
+    outcome = {"success": False, "status_code": 400, "error": None, "items": 0, "text_chars": 0}
     try:
-        with inference.slot():
-            vecs = EMBEDDER.embed(items, task=task, dimensions=dims)
-    except Exception as e:
-        return "", f"Error: {_friendly_error(e)}"
-    d = len(vecs[0]) if vecs else 0
-    preview = [round(x, 4) for x in (vecs[0][:8] if vecs else [])]
-    out = f"{len(vecs)} vector(es) de {d} dims. Primer vector (8 de {d}): {preview}"
-    return out, f"Listo ({len(vecs)} embeddings, {d}-d)"
+        if not text or not text.strip():
+            outcome["error"] = "Falta el texto."
+            return "", outcome["error"]
+        if not EMBEDDER.is_downloaded():
+            outcome["status_code"] = 409
+            outcome["error"] = "EmbeddingGemma no está descargado (usar el botón Descargar)."
+            return "", outcome["error"]
+        items = [ln for ln in text.splitlines() if ln.strip()] or [text]
+        outcome["items"] = len(items)
+        outcome["text_chars"] = sum(len(t or "") for t in items)
+        if len(items) > limits.MODELBOX_MAX_EMBED_ITEMS:
+            outcome["error"] = f"Demasiados textos ({len(items)}, max {limits.MODELBOX_MAX_EMBED_ITEMS})."
+            return "", outcome["error"]
+        for t in items:
+            msg = limits.text_limit_error(t, limits.MODELBOX_MAX_EMBED_CHARS, "Texto de embeddings")
+            if msg:
+                outcome["error"] = msg
+                return "", msg
+        dims = int(dimensions) if dimensions else None
+        try:
+            with inference.slot():
+                vecs = EMBEDDER.embed(items, task=task, dimensions=dims)
+        except Exception as e:
+            outcome["status_code"] = 500
+            outcome["error"] = _friendly_error(e)
+            return "", f"Error: {outcome['error']}"
+        outcome["success"], outcome["status_code"] = True, 200
+        d = len(vecs[0]) if vecs else 0
+        preview = [round(x, 4) for x in (vecs[0][:8] if vecs else [])]
+        out = f"{len(vecs)} vector(es) de {d} dims. Primer vector (8 de {d}): {preview}"
+        return out, f"Listo ({len(vecs)} embeddings, {d}-d)"
+    finally:
+        _log_panel("embeddings", EMBEDDER_NAME, started_at, outcome["success"],
+                   outcome["status_code"], outcome["error"],
+                   items=outcome["items"], text_chars=outcome["text_chars"],
+                   dimensions=int(dimensions) if dimensions else None)
 
 
 def refresh_monitor():
@@ -326,6 +399,36 @@ def refresh_monitor():
     md += (f"\n\n**Cola de inferencia**: {q['active']} en curso · {q['waiting']} esperando "
            f"(máx {q['max_concurrent']} en paralelo)")
     return md
+
+
+_HISTORY_HEADERS = ["hora (UTC)", "origen", "tipo", "modelo", "chars",
+                    "dur (s)", "espera (s)", "ok", "http", "error"]
+
+
+def _history_data(limit=100, call_type=None):
+    """Resumen + filas del historial unificado (API + /v1 + panel)."""
+    ct = call_type if call_type and call_type != "todos" else None
+    payload = usage.usage_payload(limit=int(limit or 100), call_type=ct)
+    s = payload["summary"]
+    by_type = " · ".join(f"{k}: {v}" for k, v in (s.get("by_type") or {}).items()) or "—"
+    summary = (f"**{s['total_calls']} llamadas** · {s['successful_calls']} ok · "
+               f"{s['failed_calls']} con error · por tipo: {by_type}")
+    rows = []
+    for c in payload["calls"]:
+        ts = (c.get("ts") or "").replace("T", " ")[:19]
+        rows.append([
+            ts,
+            c.get("surface", "api"),
+            c.get("type", ""),
+            c.get("model", ""),
+            c.get("text_chars", 0),
+            c.get("duration_seconds", 0),
+            c.get("wait_seconds", 0),
+            "✓" if c.get("success") else "✗",
+            c.get("status_code", ""),
+            (c.get("error") or "")[:120],
+        ])
+    return summary, rows
 
 
 def _api_md():
@@ -516,6 +619,20 @@ with gr.Blocks(title="Modelbox") as demo:
                         emb_out = gr.Textbox(label="Resultado", lines=3)
                         emb_msg = gr.Markdown("")
 
+                with gr.Tab("Historial") as hist_tab:
+                    gr.Markdown("Registro unificado de llamadas: panel, API nativa (`/api/*`) "
+                                "y OpenAI-compatible (`/v1/*`). Solo metadatos — no guarda texto ni audio.")
+                    with gr.Row():
+                        hist_type = gr.Dropdown(
+                            ["todos", "tts", "clone", "transcribe", "embeddings"],
+                            value="todos", label="Filtrar por tipo")
+                        hist_limit = gr.Dropdown(["50", "100", "200", "500"], value="100",
+                                                 label="Máximo de filas")
+                        hist_refresh = gr.Button("Actualizar", variant="primary")
+                    hist_summary = gr.Markdown("")
+                    hist_table = gr.Dataframe(headers=_HISTORY_HEADERS, datatype="str",
+                                              wrap=True, interactive=False, label="Llamadas recientes")
+
                 with gr.Tab("API"):
                     gr.Markdown(_api_md())
 
@@ -556,6 +673,10 @@ with gr.Blocks(title="Modelbox") as demo:
                                outputs=[emb_status, emb_download_btn, emb_btn, emb_msg])
         emb_enable_cb.change(set_enable_embed, inputs=emb_enable_cb, outputs=emb_status)
         emb_btn.click(do_embed, inputs=[emb_text_in, emb_task_in, emb_dims_in], outputs=[emb_out, emb_msg])
+
+    hist_outputs = [hist_summary, hist_table]
+    hist_tab.select(_history_data, inputs=[hist_limit, hist_type], outputs=hist_outputs)
+    hist_refresh.click(_history_data, inputs=[hist_limit, hist_type], outputs=hist_outputs)
 
     timer.tick(refresh_monitor, outputs=mon_md)
 

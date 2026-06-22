@@ -16,6 +16,7 @@ Existing /api/* clients and the panel keep their current behavior.
 
 Run: uvicorn server:app --host 0.0.0.0 --port 7860   (or: python server.py)
 """
+import contextvars
 import os
 from pathlib import Path
 import secrets
@@ -40,18 +41,34 @@ API_TOKEN = os.environ.get("API_TOKEN")
 PANEL_USER = os.environ.get("PANEL_USER")
 PANEL_PASSWORD = os.environ.get("PANEL_PASSWORD")
 
+# Superficie de la llamada para el log de uso: "api" (nativo), "openai" (/v1/*).
+# Las llamadas del panel se registran aparte con surface="panel".
+_surface_var: contextvars.ContextVar[str] = contextvars.ContextVar("surface", default="api")
+
+# /api/health es público y puede recibir polling (uptime monitors, LB). Recorrer
+# HF_HOME (varios GB) en cada llamada sería I/O constante, así que cacheamos los
+# tamaños por ruta durante un TTL corto.
+_SIZE_CACHE_TTL = float(os.environ.get("MODELBOX_SIZE_CACHE_TTL", "30"))
+_size_cache: dict[str, tuple[float, float]] = {}
+
 
 def _dir_size_mb(path: str | None) -> float:
-    total = 0
     if not path or not os.path.exists(path):
         return 0.0
+    now = time.monotonic()
+    hit = _size_cache.get(path)
+    if hit and now - hit[0] < _SIZE_CACHE_TTL:
+        return hit[1]
+    total = 0
     for root, _dirs, files in os.walk(path):
         for f in files:
             try:
                 total += os.path.getsize(os.path.join(root, f))
             except OSError:
                 pass
-    return round(total / 1e6, 2)
+    value = round(total / 1e6, 2)
+    _size_cache[path] = (now, value)
+    return value
 
 
 def _require_token(authorization: str | None = Header(default=None)) -> None:
@@ -149,6 +166,7 @@ def _record_call(call: dict, started_at: float, slot_meta: dict | None,
     try:
         usage.append_call({
             **call,
+            "surface": _surface_var.get(),
             "duration_seconds": round(time.perf_counter() - started_at, 4),
             "status_code": error.status_code if error else 200,
             "success": error is None,
@@ -174,6 +192,21 @@ def _audio_duration_checked(path: str) -> float | None:
 
 app = FastAPI(title="Modelbox API", docs_url="/api/docs", openapi_url="/api/openapi.json")
 AGENT_GUIDE = Path(__file__).parent / "docs" / "AGENT_INTEGRATION.md"
+
+# CORS opt-in: solo se activa si MODELBOX_CORS_ORIGINS está configurado (lista
+# separada por comas, o "*"). Sin esa variable no se agrega middleware y el
+# comportamiento queda igual que antes. La auth es por header Bearer (no cookies),
+# por eso allow_credentials=False es seguro incluso con "*".
+_cors_origins = [o.strip() for o in os.environ.get("MODELBOX_CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors_origins:
+    from fastapi.middleware.cors import CORSMiddleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        allow_credentials=False,
+    )
 
 
 @app.exception_handler(OpenAIHTTPException)
@@ -272,7 +305,7 @@ def pricing():
 
 @app.get("/api/usage", dependencies=[Depends(_require_token)])
 def get_usage(limit: int = Query(100, ge=1, le=1000),
-              type: str | None = Query(None, description="Filter by tts, clone, or transcribe")):
+              type: str | None = Query(None, description="Filter by tts, clone, transcribe, or embeddings")):
     return usage.usage_payload(limit=limit, call_type=type)
 
 
@@ -504,6 +537,10 @@ def embeddings(req: EmbeddingsRequest):
             raise HTTPException(400, "Falta el texto de entrada.")
         if len(inputs) > limits.MODELBOX_MAX_EMBED_ITEMS:
             raise HTTPException(400, f"Demasiados textos ({len(inputs)}, max {limits.MODELBOX_MAX_EMBED_ITEMS}).")
+        valid_dims = getattr(embedder, "valid_dims", (768, 512, 256, 128))
+        if req.dimensions is not None and req.dimensions not in valid_dims:
+            allowed = ", ".join(str(d) for d in valid_dims)
+            raise HTTPException(400, f"dimensions invalido ({req.dimensions}); valores permitidos: {allowed}.")
         for t in inputs:
             _enforce_text_limit(t, limits.MODELBOX_MAX_EMBED_CHARS, "Texto de embeddings")
         if not embedder.is_downloaded():
@@ -559,10 +596,13 @@ def v1_models():
 @app.post("/v1/audio/speech", dependencies=[Depends(_require_token_openai)])
 def v1_audio_speech(req: OpenAISpeechRequest):
     """OpenAI-compatible TTS wrapper over /api/tts. Always returns audio/wav."""
+    token = _surface_var.set("openai")
     try:
         return tts(TTSRequest(model=req.model, text=req.input, voice=req.voice))
     except HTTPException as exc:
         raise _as_openai_exception(exc)
+    finally:
+        _surface_var.reset(token)
 
 
 @app.post("/v1/audio/transcriptions", dependencies=[Depends(_require_token_openai)])
@@ -577,6 +617,7 @@ def v1_audio_transcriptions(file: UploadFile = File(...), model: str = Form(...)
             "invalid_request_error",
             "invalid_response_format",
         )
+    token = _surface_var.set("openai")
     try:
         result = _transcribe_upload(
             audio=file, language=language, model=model, include_duration=True
@@ -588,6 +629,8 @@ def v1_audio_transcriptions(file: UploadFile = File(...), model: str = Form(...)
         }
     except HTTPException as exc:
         raise _as_openai_exception(exc)
+    finally:
+        _surface_var.reset(token)
 
 
 @app.post("/v1/embeddings", dependencies=[Depends(_require_token_openai)])
@@ -598,12 +641,15 @@ def v1_embeddings(req: OpenAIEmbeddingsRequest):
             400, "encoding_format must be 'float'.",
             "invalid_request_error", "invalid_encoding_format",
         )
+    token = _surface_var.set("openai")
     try:
         result = embeddings(EmbeddingsRequest(
             model=req.model, input=req.input, task="document", dimensions=req.dimensions,
         ))
     except HTTPException as exc:
         raise _as_openai_exception(exc)
+    finally:
+        _surface_var.reset(token)
     vectors = result["embeddings"]
     texts = [req.input] if isinstance(req.input, str) else list(req.input)
     approx_tokens = sum(len(t or "") for t in texts)  # aproximado (no exacto en tokens)

@@ -16,7 +16,13 @@ from uuid import uuid4
 from shared.paths import LOGS_DIR
 
 USAGE_LOG = os.path.join(LOGS_DIR, "calls.jsonl")
+_BACKUP_LOG = USAGE_LOG + ".1"
 _lock = threading.Lock()
+
+# Rotación por tamaño: cuando el log activo supera el tope, se renombra a .1
+# (pisando el backup anterior). Así el archivo activo queda acotado y no crece
+# sin límite. El historial visible conserva backup + activo.
+_MAX_LOG_BYTES = max(1, int(os.environ.get("MODELBOX_MAX_LOG_MB", "5"))) * 1024 * 1024
 
 TRIAL_PRICING = {
     "currency": "USD",
@@ -32,6 +38,15 @@ def new_request_id() -> str:
     return uuid4().hex
 
 
+def _rotate_if_needed() -> None:
+    """Rota el log activo a .1 si superó el tope (pisa el backup previo)."""
+    try:
+        if os.path.getsize(USAGE_LOG) >= _MAX_LOG_BYTES:
+            os.replace(USAGE_LOG, _BACKUP_LOG)
+    except OSError:
+        pass
+
+
 def append_call(record: dict[str, Any]) -> dict[str, Any]:
     os.makedirs(LOGS_DIR, exist_ok=True)
     clean = {
@@ -40,26 +55,28 @@ def append_call(record: dict[str, Any]) -> dict[str, Any]:
         **record,
     }
     with _lock:
+        _rotate_if_needed()
         with open(USAGE_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(clean, ensure_ascii=False, separators=(",", ":")) + "\n")
     return clean
 
 
 def _read_all(call_type: str | None = None) -> list[dict[str, Any]]:
-    if not os.path.exists(USAGE_LOG):
-        return []
-
     rows: list[dict[str, Any]] = []
     with _lock:
-        with open(USAGE_LOG, "r", encoding="utf-8") as f:
-            for line in f:
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if call_type and row.get("type") != call_type:
-                    continue
-                rows.append(row)
+        # Backup primero (más viejo), luego activo: queda ordenado de viejo a nuevo.
+        for path in (_BACKUP_LOG, USAGE_LOG):
+            if not os.path.exists(path):
+                continue
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if call_type and row.get("type") != call_type:
+                        continue
+                    rows.append(row)
     return rows
 
 

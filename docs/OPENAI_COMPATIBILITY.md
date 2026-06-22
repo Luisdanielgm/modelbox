@@ -199,7 +199,7 @@ Request:
 |---|---|
 | `model` | `model` |
 | `input` (string or list of strings) | `input` |
-| `dimensions` | `dimensions` (Matryoshka 512/256/128; default 768) |
+| `dimensions` | `dimensions` (Matryoshka 512/256/128; default 768; other values return `400`) |
 | `encoding_format` | accepted only as `float` |
 
 Response (OpenAI shape): `{ "object": "list", "data": [ { "object": "embedding", "index": 0, "embedding": [ ... ] } ], "model": "...", "usage": { ... } }`.
@@ -295,8 +295,15 @@ Defaults:
 | `MODELBOX_MAX_AUDIO_SECONDS` | `1200` | clone/STT uploads, including `/v1/audio/transcriptions` |
 | `MODELBOX_MAX_UPLOAD_MB` | `30` | clone/STT uploads |
 | `MODELBOX_MAX_CONCURRENT` | deployment-specific | inference queue concurrency |
+| `MODELBOX_MAX_EMBED_CHARS` | `8000` | `/api/embeddings`, `/v1/embeddings` |
+| `MODELBOX_MAX_EMBED_ITEMS` | `64` | `/api/embeddings`, `/v1/embeddings` |
+| `MODELBOX_MAX_LOG_MB` | `5` | usage log rotation size |
+| `MODELBOX_SIZE_CACHE_TTL` | `30` | `/api/health` storage-size cache (seconds) |
+| `MODELBOX_CORS_ORIGINS` | _(unset)_ | comma-separated allowed origins, or `*`; unset = no CORS |
 
 Requests above text/audio-duration limits return `400`. Files above upload-size limit return `413`.
+
+**CORS** is opt-in: set `MODELBOX_CORS_ORIGINS` (e.g. `https://app.example.com,https://example.com` or `*`) to allow browser clients to call the API cross-origin. Auth is via the `Authorization: Bearer` header (not cookies), so credentials are not allowed. Leave it unset for server-to-server use.
 
 ## Usage and billing
 
@@ -315,7 +322,7 @@ GET /api/usage?limit=100
 Authorization: Bearer <API_TOKEN>
 ```
 
-Usage records include call type, model, character counts, upload size, duration, wait time, queue snapshots, HTTP status, and errors. They do not store raw text or audio.
+Usage records include call type, surface (`api`, `openai`, or `panel`), model, character counts, upload size, duration, wait time, queue snapshots, HTTP status, and errors. They do not store raw text or audio. Panel (playground) calls are logged to the same audit trail. The log rotates by size (`MODELBOX_MAX_LOG_MB`, default 5).
 
 For STT billing, use the `duration` field returned by `/v1/audio/transcriptions`.
 

@@ -230,8 +230,8 @@ curl -H "Authorization: Bearer $API_TOKEN" \
 ### Native embeddings
 
 `input` accepts a string or a list of strings. `task` is `document` (default) or
-`query`. `dimensions` truncates the 768-d vector via Matryoshka (512/256/128) and
-re-normalizes.
+`query`. `dimensions` truncates the 768-d vector via Matryoshka and re-normalizes.
+Only `768`, `512`, `256`, or `128` are accepted; any other value returns `400`.
 
 > **Per-text limit — chunk long documents.** Each input text is processed up to
 > **~2048 tokens** (EmbeddingGemma's context; hard cap `MODELBOX_MAX_EMBED_CHARS=8000`
@@ -273,4 +273,4 @@ vectors = [d.embedding for d in r.data]
 - `/api/clone` response is `audio/wav`.
 - `/api/transcribe` response is `{ "text": "...", "language": "es" }`.
 - `/api/embeddings` response is `{ "model", "task", "dimensions", "embeddings": [[...]] }`; nothing is stored.
-- `/api/usage` persists metadata in `/modelbox-data/logs/calls.jsonl`; it does not store raw text or audio.
+- `/api/usage` persists metadata in `/modelbox-data/logs/calls.jsonl`; it does not store raw text or audio. Each record carries a `surface` field (`api`, `openai`, or `panel`) so playground and API traffic are distinguishable. The log rotates by size (`MODELBOX_MAX_LOG_MB`, default 5; keeps one `.1` backup).
