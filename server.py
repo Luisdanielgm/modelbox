@@ -33,19 +33,22 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from app import demo
-from shared import inference, limits, state, usage
+from shared import inference, limits, state, tokens, usage
 from shared.backends import BACKENDS
 from shared.embeddings import EMBEDDERS
 from shared.paths import DATA_DIR, LOGS_DIR, OUTPUTS, POCKET_WEIGHTS, STATE_DIR, SUPERTONIC_DIR
 from shared.transcribe import TRANSCRIBERS
 
-API_TOKEN = os.environ.get("API_TOKEN")
 PANEL_USER = os.environ.get("PANEL_USER")
 PANEL_PASSWORD = os.environ.get("PANEL_PASSWORD")
 
 # Superficie de la llamada para el log de uso: "api" (nativo), "openai" (/v1/*).
 # Las llamadas del panel se registran aparte con surface="panel".
 _surface_var: contextvars.ContextVar[str] = contextvars.ContextVar("surface", default="api")
+# Cliente resuelto por token, para atribuir cada llamada en el log de uso. Se setea
+# en el body del endpoint (no en la dependencia: FastAPI ejecuta setup/teardown de
+# dependencias en contextos distintos, así que un contextvar de dependencia no llega).
+_client_var: contextvars.ContextVar[str] = contextvars.ContextVar("client", default="")
 
 # /api/health es público y puede recibir polling (uptime monitors, LB). Recorrer
 # HF_HOME (varios GB) en cada llamada sería I/O constante, así que cacheamos los
@@ -107,12 +110,35 @@ def _dir_size_mb(path: str | None) -> float:
     return value
 
 
-def _require_token(authorization: str | None = Header(default=None)) -> None:
-    if not API_TOKEN:
+def _resolve_client(authorization: str | None) -> str | None:
+    """Devuelve el cliente del token presentado, o None si no coincide con ninguno.
+    Comparación de tiempo constante contra cada token conocido (no filtra byte a byte)."""
+    presented = authorization or ""
+    for value, client in tokens.TOKENS.items():
+        if secrets.compare_digest(presented, f"Bearer {value}"):
+            return client
+    return None
+
+
+def _authenticate(authorization: str | None) -> str:
+    if not tokens.TOKENS:
         raise HTTPException(status_code=503, detail="API deshabilitada (configurar API_TOKEN).")
-    # compare_digest: comparación de tiempo constante (no filtra el token byte a byte).
-    if not secrets.compare_digest(authorization or "", f"Bearer {API_TOKEN}"):
+    client = _resolve_client(authorization)
+    if client is None:
         raise HTTPException(status_code=401, detail="Token inválido o ausente.")
+    return client
+
+
+def _set_client(authorization: str | None) -> None:
+    """Fija el cliente de esta llamada para el log. Solo actúa con un header str real:
+    en una reutilización interna (p. ej. /v1 -> /api) la función nativa recibe el
+    sentinel `Header(...)` como default (no un str), y así no pisa el cliente ya fijado."""
+    if isinstance(authorization, str):
+        _client_var.set(_resolve_client(authorization) or "")
+
+
+def _require_token(authorization: str | None = Header(default=None)) -> None:
+    _authenticate(authorization)
 
 
 class OpenAIHTTPException(Exception):
@@ -220,6 +246,7 @@ def _record_call(call: dict, started_at: float, slot_meta: dict | None,
         usage.append_call({
             **call,
             "surface": _surface_var.get(),
+            "client": _client_var.get(),
             "duration_seconds": round(time.perf_counter() - started_at, 4),
             "status_code": error.status_code if error else 200,
             "success": error is None,
@@ -359,8 +386,20 @@ def pricing():
 
 @app.get("/api/usage", dependencies=[Depends(_require_token)])
 def get_usage(limit: int = Query(100, ge=1, le=1000),
-              type: str | None = Query(None, description="Filter by tts, clone, transcribe, or embeddings")):
-    return usage.usage_payload(limit=limit, call_type=type)
+              type: str | None = Query(None, description="Filter by tts, clone, transcribe, or embeddings"),
+              client: str | None = Query(None, description="Admin (API_TOKEN) only; a named token sees only its own usage"),
+              authorization: str | None = Header(default=None)):
+    # Aislamiento por cliente: el operador (API_TOKEN) ve todo y puede filtrar por
+    # cualquier cliente; un token con nombre solo ve su propio uso.
+    caller = _resolve_client(authorization)
+    if caller is None:
+        raise HTTPException(401, "Token inválido o ausente.")
+    is_admin = tokens.ADMIN_CLIENT is not None and caller == tokens.ADMIN_CLIENT
+    if not is_admin:
+        if client and client != caller:
+            raise HTTPException(403, "No autorizado a ver el uso de otro cliente.")
+        client = caller
+    return usage.usage_payload(limit=limit, call_type=type, client=client)
 
 
 @app.get("/api/models", dependencies=[Depends(_require_token)])
@@ -370,7 +409,8 @@ def list_models():
 
 
 @app.post("/api/tts", dependencies=[Depends(_require_token), Depends(_rate_limit)])
-def tts(req: TTSRequest):
+def tts(req: TTSRequest, authorization: str | None = Header(default=None)):
+    _set_client(authorization)
     started_at = time.perf_counter()
     slot_meta = None
     error = None
@@ -458,8 +498,10 @@ def _to_mp3(wav_bytes: bytes) -> bytes:
 
 @app.post("/api/clone", dependencies=[Depends(_require_token), Depends(_rate_limit)])
 def clone(model: str = Form(...), text: str = Form(...),
-          ref_audio: UploadFile = File(...), ref_text: str = Form(None)):
+          ref_audio: UploadFile = File(...), ref_text: str = Form(None),
+          authorization: str | None = Header(default=None)):
     """Clona voz desde un audio de referencia. El audio se procesa y se borra."""
+    _set_client(authorization)
     started_at = time.perf_counter()
     slot_meta = None
     error = None
@@ -585,14 +627,17 @@ def _transcribe_upload(audio: UploadFile, language: str | None, model: str,
 
 @app.post("/api/transcribe", dependencies=[Depends(_require_token), Depends(_rate_limit)])
 def transcribe(audio: UploadFile = File(...), language: str = Form(None),
-               model: str = Form("Whisper")):
+               model: str = Form("Whisper"),
+               authorization: str | None = Header(default=None)):
     """Transcribe audio with the native Modelbox API response shape."""
+    _set_client(authorization)
     return _transcribe_upload(audio=audio, language=language, model=model, include_duration=False)
 
 
 @app.post("/api/embeddings", dependencies=[Depends(_require_token), Depends(_rate_limit)])
-def embeddings(req: EmbeddingsRequest):
+def embeddings(req: EmbeddingsRequest, authorization: str | None = Header(default=None)):
     """Genera embeddings (texto -> vectores) para retrieval/RAG. No guarda nada."""
+    _set_client(authorization)
     started_at = time.perf_counter()
     slot_meta = None
     error = None
@@ -670,10 +715,11 @@ def v1_models():
 
 
 @app.post("/v1/audio/speech", dependencies=[Depends(_require_token_openai), Depends(_rate_limit_openai)])
-def v1_audio_speech(req: OpenAISpeechRequest):
+def v1_audio_speech(req: OpenAISpeechRequest, authorization: str | None = Header(default=None)):
     """OpenAI-compatible TTS wrapper over /api/tts. Returns audio/wav (default) or
     audio/mpeg when response_format is 'mp3'."""
     token = _surface_var.set("openai")
+    _set_client(authorization)
     try:
         return tts(TTSRequest(model=req.model, text=req.input, voice=req.voice,
                               response_format=req.response_format))
@@ -686,7 +732,8 @@ def v1_audio_speech(req: OpenAISpeechRequest):
 @app.post("/v1/audio/transcriptions", dependencies=[Depends(_require_token_openai), Depends(_rate_limit_openai)])
 def v1_audio_transcriptions(file: UploadFile = File(...), model: str = Form(...),
                             response_format: str = Form("json"),
-                            language: str | None = Form(None)):
+                            language: str | None = Form(None),
+                            authorization: str | None = Header(default=None)):
     """OpenAI-compatible STT wrapper over /api/transcribe with mandatory duration."""
     if response_format not in (None, "json", "verbose_json"):
         raise OpenAIHTTPException(
@@ -696,6 +743,7 @@ def v1_audio_transcriptions(file: UploadFile = File(...), model: str = Form(...)
             "invalid_response_format",
         )
     token = _surface_var.set("openai")
+    _set_client(authorization)
     try:
         result = _transcribe_upload(
             audio=file, language=language, model=model, include_duration=True
@@ -712,7 +760,7 @@ def v1_audio_transcriptions(file: UploadFile = File(...), model: str = Form(...)
 
 
 @app.post("/v1/embeddings", dependencies=[Depends(_require_token_openai), Depends(_rate_limit_openai)])
-def v1_embeddings(req: OpenAIEmbeddingsRequest):
+def v1_embeddings(req: OpenAIEmbeddingsRequest, authorization: str | None = Header(default=None)):
     """OpenAI-compatible embeddings wrapper over /api/embeddings (task=document)."""
     if req.encoding_format not in (None, "float"):
         raise OpenAIHTTPException(
@@ -720,6 +768,7 @@ def v1_embeddings(req: OpenAIEmbeddingsRequest):
             "invalid_request_error", "invalid_encoding_format",
         )
     token = _surface_var.set("openai")
+    _set_client(authorization)
     try:
         result = embeddings(EmbeddingsRequest(
             model=req.model, input=req.input, task="document", dimensions=req.dimensions,

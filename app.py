@@ -10,7 +10,7 @@ import time
 
 import gradio as gr
 
-from shared import inference, limits, monitor, state, usage
+from shared import inference, limits, monitor, state, tokens, usage
 from shared.backends import BACKENDS
 from shared.embeddings import EMBEDDERS
 from shared.paths import OUTPUTS
@@ -39,7 +39,7 @@ WHISPER = next(iter(TRANSCRIBERS.values()), None)
 WHISPER_NAME = WHISPER.name if WHISPER else None
 EMBEDDER = next(iter(EMBEDDERS.values()), None)
 EMBEDDER_NAME = EMBEDDER.name if EMBEDDER else None
-API_ENABLED = bool(os.environ.get("API_TOKEN"))
+API_ENABLED = tokens.has_tokens()
 
 
 def _friendly_error(e):
@@ -401,14 +401,15 @@ def refresh_monitor():
     return md
 
 
-_HISTORY_HEADERS = ["hora (UTC)", "origen", "tipo", "modelo", "chars",
+_HISTORY_HEADERS = ["hora (UTC)", "origen", "cliente", "tipo", "modelo", "chars",
                     "dur (s)", "espera (s)", "ok", "http", "error"]
 
 
-def _history_data(limit=100, call_type=None):
+def _history_data(limit=100, call_type=None, client=None):
     """Resumen + filas del historial unificado (API + /v1 + panel)."""
     ct = call_type if call_type and call_type != "todos" else None
-    payload = usage.usage_payload(limit=int(limit or 100), call_type=ct)
+    cl = client if client and client != "todos" else None
+    payload = usage.usage_payload(limit=int(limit or 100), call_type=ct, client=cl)
     s = payload["summary"]
     by_type = " · ".join(f"{k}: {v}" for k, v in (s.get("by_type") or {}).items()) or "—"
     summary = (f"**{s['total_calls']} llamadas** · {s['successful_calls']} ok · "
@@ -419,6 +420,7 @@ def _history_data(limit=100, call_type=None):
         rows.append([
             ts,
             c.get("surface", "api"),
+            c.get("client", ""),
             c.get("type", ""),
             c.get("model", ""),
             c.get("text_chars", 0),
@@ -631,6 +633,8 @@ with gr.Blocks(title="Modelbox") as demo:
                         hist_type = gr.Dropdown(
                             ["todos", "tts", "clone", "transcribe", "embeddings"],
                             value="todos", label="Filtrar por tipo")
+                        hist_client = gr.Dropdown(["todos"] + tokens.CLIENTS, value="todos",
+                                                  label="Filtrar por cliente", allow_custom_value=True)
                         hist_limit = gr.Dropdown(["50", "100", "200", "500"], value="100",
                                                  label="Máximo de filas")
                         hist_refresh = gr.Button("Actualizar", variant="primary")
@@ -680,8 +684,9 @@ with gr.Blocks(title="Modelbox") as demo:
         emb_btn.click(do_embed, inputs=[emb_text_in, emb_task_in, emb_dims_in], outputs=[emb_out, emb_msg])
 
     hist_outputs = [hist_summary, hist_table]
-    hist_tab.select(_history_data, inputs=[hist_limit, hist_type], outputs=hist_outputs)
-    hist_refresh.click(_history_data, inputs=[hist_limit, hist_type], outputs=hist_outputs)
+    hist_inputs = [hist_limit, hist_type, hist_client]
+    hist_tab.select(_history_data, inputs=hist_inputs, outputs=hist_outputs)
+    hist_refresh.click(_history_data, inputs=hist_inputs, outputs=hist_outputs)
 
     timer.tick(refresh_monitor, outputs=mon_md)
 

@@ -61,7 +61,7 @@ def append_call(record: dict[str, Any]) -> dict[str, Any]:
     return clean
 
 
-def _read_all(call_type: str | None = None) -> list[dict[str, Any]]:
+def _read_all(call_type: str | None = None, client: str | None = None) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     with _lock:
         # Backup primero (más viejo), luego activo: queda ordenado de viejo a nuevo.
@@ -75,6 +75,8 @@ def _read_all(call_type: str | None = None) -> list[dict[str, Any]]:
                     except json.JSONDecodeError:
                         continue
                     if call_type and row.get("type") != call_type:
+                        continue
+                    if client and row.get("client") != client:
                         continue
                     rows.append(row)
     return rows
@@ -100,8 +102,9 @@ def summarize(calls: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def usage_payload(limit: int = 100, call_type: str | None = None) -> dict[str, Any]:
-    all_calls = _read_all(call_type=call_type)
+def usage_payload(limit: int = 100, call_type: str | None = None,
+                  client: str | None = None) -> dict[str, Any]:
+    all_calls = _read_all(call_type=call_type, client=client)
     calls = all_calls[-max(1, min(int(limit or 100), 1000)):][::-1]
     return {
         "pricing": TRIAL_PRICING,
