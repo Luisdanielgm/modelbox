@@ -68,6 +68,8 @@ Default service limits:
 | `MODELBOX_MAX_EMBED_CHARS` | `8000` | `/api/embeddings`, `/v1/embeddings` | `400` |
 | `MODELBOX_MAX_EMBED_ITEMS` | `64` | `/api/embeddings`, `/v1/embeddings` | `400` |
 | `MODELBOX_MAX_UPLOAD_MB` | `30` | upload endpoints | `413` |
+| `MODELBOX_RATE_LIMIT` | `0` (off) | per-token requests/window on inference endpoints | `429` |
+| `MODELBOX_RATE_WINDOW` | `60` | rate-limit window in seconds | — |
 
 Example health shape:
 
@@ -144,7 +146,7 @@ Field mapping:
 | `voice` | `voice` |
 | `model` | `model` |
 
-Response: audio bytes. Modelbox currently returns `Content-Type: audio/wav` even if `response_format` is omitted.
+Response: audio bytes. Default is `Content-Type: audio/wav`. Set `response_format` to `mp3` to receive `audio/mpeg`; any other value (or omitting it) returns `wav`.
 
 ### `POST /v1/audio/transcriptions`
 
@@ -185,7 +187,8 @@ All non-2xx `/v1/*` responses use:
 }
 ```
 
-Status codes are preserved: `401`, `403`, `404`, `409`, `413`, `422`, `500`, `503`.
+Status codes are preserved: `401`, `403`, `404`, `409`, `413`, `422`, `429`, `500`, `503`.
+`429` (`rate_limit_exceeded`) only occurs when the per-token rate limit is enabled.
 
 ## Examples
 
@@ -269,7 +272,7 @@ vectors = [d.embedding for d in r.data]
 
 ## Native endpoint notes
 
-- `/api/tts` response is `audio/wav`.
+- `/api/tts` response is `audio/wav` by default, or `audio/mpeg` when `response_format` is `mp3`.
 - `/api/clone` response is `audio/wav`.
 - `/api/transcribe` response is `{ "text": "...", "language": "es" }`.
 - `/api/embeddings` response is `{ "model", "task", "dimensions", "embeddings": [[...]] }`; nothing is stored.

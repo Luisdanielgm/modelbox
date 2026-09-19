@@ -138,9 +138,9 @@ Mapping:
 | `model` | `model` |
 | `input` | `text` |
 | `voice` | `voice` |
-| `response_format` | accepted for compatibility; current response is `audio/wav` |
+| `response_format` | `wav` (default) or `mp3` -> `audio/mpeg`; any other value returns `wav` |
 
-Response: audio bytes with `Content-Type: audio/wav`.
+Response: audio bytes. `Content-Type: audio/wav` by default, or `audio/mpeg` when `response_format` is `mp3`.
 
 Internal path:
 
@@ -260,6 +260,7 @@ Status codes are preserved.
 | `409` | `model_not_ready` | Model exists but is not downloaded |
 | `413` | `file_too_large` | Uploaded audio exceeds size limit |
 | `422` | `validation_error` | Required field missing or invalid request shape |
+| `429` | `rate_limit_exceeded` | Per-token rate limit exceeded (only when enabled) |
 | `500` | `server_error` | Runtime/model error |
 | `503` | `api_disabled` | `API_TOKEN` not configured server-side |
 
@@ -295,6 +296,8 @@ Defaults:
 | `MODELBOX_MAX_AUDIO_SECONDS` | `1200` | clone/STT uploads, including `/v1/audio/transcriptions` |
 | `MODELBOX_MAX_UPLOAD_MB` | `30` | clone/STT uploads |
 | `MODELBOX_MAX_CONCURRENT` | deployment-specific | inference queue concurrency |
+| `MODELBOX_RATE_LIMIT` | `0` (off) | per-token requests per window on inference endpoints; `429` when exceeded |
+| `MODELBOX_RATE_WINDOW` | `60` | rate-limit window in seconds |
 | `MODELBOX_MAX_EMBED_CHARS` | `8000` | `/api/embeddings`, `/v1/embeddings` |
 | `MODELBOX_MAX_EMBED_ITEMS` | `64` | `/api/embeddings`, `/v1/embeddings` |
 | `MODELBOX_MAX_LOG_MB` | `5` | usage log rotation size |

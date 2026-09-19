@@ -12,6 +12,35 @@ Las entradas 🟡 y 🔴 incluyen una **Nota para integradores**.
 
 ## [No publicado]
 
+Semana 1 del roadmap (robustez y limpieza). Todo desplegable sin cambios para
+Cauce: el rate-limit viene **desactivado** por defecto.
+
+### Agregado
+- 🟢 **`response_format: mp3` en TTS.** `/api/tts` y `/v1/audio/speech` devuelven
+  `audio/mpeg` cuando `response_format` es `"mp3"`. El default sigue siendo `wav`,
+  y cualquier otro valor también devuelve `wav` (retrocompatible). La conversión
+  usa ffmpeg (ya presente en la imagen).
+- 🟡 **Rate-limit por token (opt-in).** Ventana fija configurable con
+  `MODELBOX_RATE_LIMIT` (solicitudes; `0` = desactivado, default) y
+  `MODELBOX_RATE_WINDOW` (segundos, default 60). Aplica a los endpoints de
+  inferencia (`/api/tts`, `/api/clone`, `/api/transcribe`, `/api/embeddings` y sus
+  equivalentes `/v1/*`). Al excederse devuelve `429` (shape OpenAI en `/v1/*`).
+
+  > **Nota para integradores (Cauce):** por defecto está **desactivado**, así que
+  > desplegarlo no cambia nada. Si se activa, conviene fijar el límite por encima
+  > del uso real de Cauce y que el cliente maneje `429` con reintentos/backoff.
+  > Se coordinará antes de activarlo.
+
+### Cambiado
+- 🟢 **Detección de descarga por modelo.** El `is_downloaded()` de Whisper y
+  EmbeddingGemma mide la carpeta de caché del propio modelo
+  (`models--org--repo`) en vez de todo `HF_HOME`. Evita un falso "descargado"
+  cuando otro modelo llenó la caché compartida.
+- 🟢 **Limpieza interna.** Se eliminó `read_calls()` (sin uso) y el timer de
+  recursos del panel pasó de 1.5 s a 4 s (menos polling por cliente conectado).
+
+## Desplegado
+
 ### Agregado
 - 🟢 **Historial de uso unificado.** El panel ahora registra sus propias llamadas
   (TTS, clonación, transcripción, embeddings) en el mismo log de auditoría que la
