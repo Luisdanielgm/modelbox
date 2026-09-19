@@ -325,7 +325,7 @@ GET /api/usage?limit=100
 Authorization: Bearer <API_TOKEN>
 ```
 
-Usage records include call type, surface (`api`, `openai`, or `panel`), model, character counts, upload size, duration, wait time, queue snapshots, HTTP status, and errors. They do not store raw text or audio. Panel (playground) calls are logged to the same audit trail. The log rotates by size (`MODELBOX_MAX_LOG_MB`, default 5).
+Usage records include call type, surface (`api`, `openai`, or `panel`), client (the token's client name), model, character counts, upload size, duration, wait time, queue snapshots, HTTP status, and errors. They do not store raw text or audio. Panel (playground) calls are logged to the same audit trail. The single `API_TOKEN` (operator/admin) sees all clients and may filter by any `client`; a named token only sees its own usage (another client's returns `403`). The log rotates by size (`MODELBOX_MAX_LOG_MB`, default 5). Auth accepts the single `API_TOKEN` (client `MODELBOX_DEFAULT_CLIENT`) and optional named tokens via `MODELBOX_TOKENS="client:token,..."`.
 
 For STT billing, use the `duration` field returned by `/v1/audio/transcriptions`.
 

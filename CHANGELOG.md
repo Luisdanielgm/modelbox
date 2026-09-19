@@ -12,8 +12,31 @@ Las entradas 🟡 y 🔴 incluyen una **Nota para integradores**.
 
 ## [No publicado]
 
-Semana 1 del roadmap (robustez y limpieza). Todo desplegable sin cambios para
-Cauce: el rate-limit viene **desactivado** por defecto.
+Semana 2 del roadmap (identidad de cliente / multi-token). 🟢 transparente para
+Cauce: el `API_TOKEN` único sigue siendo válido.
+
+### Agregado
+- 🟢 **Múltiples tokens con cliente asociado.** Además del `API_TOKEN` único
+  (atribuido al cliente `MODELBOX_DEFAULT_CLIENT`, default `"default"`), se pueden
+  declarar varios tokens con `MODELBOX_TOKENS="cliente:token,..."`. Cada llamada
+  autenticada se atribuye a su cliente.
+- 🟢 **Campo `client` en el registro de uso** + filtro por cliente:
+  `GET /api/usage?client=<nombre>` y un selector de cliente en la pestaña
+  Historial del panel.
+- 🟢 **Aislamiento del uso por cliente.** En `/api/usage`, el `API_TOKEN` único
+  (operador/admin) ve el uso de todos los clientes; un token con nombre solo ve
+  el suyo (pedir el de otro devuelve `403`). El panel (operador) sigue viendo
+  todo. Evita fugas de metadatos entre clientes al agregar más tokens.
+
+  > **Nota para integradores (Cauce):** ningún cambio requerido. El token actual
+  > sigue funcionando igual y queda atribuido al cliente `"default"`. Si más
+  > adelante se quiere separar el consumo de Cauce, se le asigna un token propio
+  > vía `MODELBOX_TOKENS` (coordinado).
+
+## Desplegado — Semana 1
+
+Robustez y limpieza. Todo desplegado sin cambios para Cauce: el rate-limit viene
+**desactivado** por defecto.
 
 ### Agregado
 - 🟢 **`response_format: mp3` en TTS.** `/api/tts` y `/v1/audio/speech` devuelven
@@ -39,7 +62,7 @@ Cauce: el rate-limit viene **desactivado** por defecto.
 - 🟢 **Limpieza interna.** Se eliminó `read_calls()` (sin uso) y el timer de
   recursos del panel pasó de 1.5 s a 4 s (menos polling por cliente conectado).
 
-## Desplegado
+## Desplegado — base
 
 ### Agregado
 - 🟢 **Historial de uso unificado.** El panel ahora registra sus propias llamadas

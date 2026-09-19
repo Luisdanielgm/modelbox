@@ -17,6 +17,11 @@ Protected endpoints require:
 Authorization: Bearer <API_TOKEN>
 ```
 
+The single `API_TOKEN` stays valid and is attributed to the client
+`MODELBOX_DEFAULT_CLIENT` (default `"default"`). Optionally, declare multiple
+tokens with a client name via `MODELBOX_TOKENS="client:token,other:token2"`; each
+authenticated call is attributed to its client in the usage log.
+
 Public endpoints:
 
 | Method | Path | Purpose |
@@ -276,4 +281,4 @@ vectors = [d.embedding for d in r.data]
 - `/api/clone` response is `audio/wav`.
 - `/api/transcribe` response is `{ "text": "...", "language": "es" }`.
 - `/api/embeddings` response is `{ "model", "task", "dimensions", "embeddings": [[...]] }`; nothing is stored.
-- `/api/usage` persists metadata in `/modelbox-data/logs/calls.jsonl`; it does not store raw text or audio. Each record carries a `surface` field (`api`, `openai`, or `panel`) so playground and API traffic are distinguishable. The log rotates by size (`MODELBOX_MAX_LOG_MB`, default 5; keeps one `.1` backup).
+- `/api/usage` persists metadata in `/modelbox-data/logs/calls.jsonl`; it does not store raw text or audio. Each record carries a `surface` field (`api`, `openai`, or `panel`) and a `client` field (the token's client name) so playground/API traffic and per-client usage are distinguishable. The single `API_TOKEN` (operator/admin) sees all clients and may filter by any `client`; a named token (from `MODELBOX_TOKENS`) only sees its own usage — requesting another client's returns `403`. Also filter by `?type=`. The log rotates by size (`MODELBOX_MAX_LOG_MB`, default 5; keeps one `.1` backup).
