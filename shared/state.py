@@ -104,6 +104,27 @@ def _dir_size_mb(path: str) -> float:
     return round(total / 1e6, 2)
 
 
+def hf_cache_size_mb(repo_id: str) -> float:
+    """MB en la caché de HF para un repo específico (carpeta ``models--org--repo``).
+
+    Reemplaza medir todo HF_HOME: distintos modelos comparten esa caché, así que
+    el tamaño global no dice si ESTE modelo está descargado. Busca en HF_HOME y en
+    HF_HOME/hub porque distintas librerías (huggingface_hub vs faster-whisper)
+    usan una u otra ubicación.
+    """
+    hf_home = os.environ.get("HF_HOME")
+    if not hf_home:
+        return 0.0
+    folder = "models--" + repo_id.replace("/", "--")
+    # Solo una ubicación existe por modelo; se devuelve la primera encontrada
+    # (sin sumar ambas, para no inflar el tamaño si algún día coexistieran).
+    for base in (hf_home, os.path.join(hf_home, "hub")):
+        candidate = os.path.join(base, folder)
+        if os.path.isdir(candidate):
+            return _dir_size_mb(candidate)
+    return 0.0
+
+
 def diagnostics() -> dict:
     """Small read-only snapshot to verify persisted state/markers in production."""
     try:

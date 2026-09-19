@@ -20,7 +20,9 @@ import contextvars
 import os
 from pathlib import Path
 import secrets
+import subprocess
 import tempfile
+import threading
 import time
 
 import gradio as gr
@@ -50,6 +52,40 @@ _surface_var: contextvars.ContextVar[str] = contextvars.ContextVar("surface", de
 # tamaños por ruta durante un TTL corto.
 _SIZE_CACHE_TTL = float(os.environ.get("MODELBOX_SIZE_CACHE_TTL", "30"))
 _size_cache: dict[str, tuple[float, float]] = {}
+
+
+def _safe_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)) or default)
+    except ValueError:
+        return default
+
+
+# Rate-limit por token (ventana fija), opt-in. Desactivado salvo que se configure
+# MODELBOX_RATE_LIMIT > 0: así un despliegue no empieza a devolver 429 a un cliente
+# existente (Cauce) sin coordinación. Aplica a los endpoints de inferencia.
+_RATE_LIMIT = max(0, _safe_int("MODELBOX_RATE_LIMIT", 0))
+_RATE_WINDOW = max(1, _safe_int("MODELBOX_RATE_WINDOW", 60))
+_rate_lock = threading.Lock()
+_rate_hits: dict[str, tuple[float, int]] = {}
+
+
+def _token_from_header(authorization: str | None) -> str:
+    return (authorization or "").removeprefix("Bearer ").strip()
+
+
+def _rate_exceeded(token: str) -> bool:
+    """True si el token superó el cupo en la ventana actual. No-op si está desactivado."""
+    if _RATE_LIMIT <= 0:
+        return False
+    now = time.monotonic()
+    with _rate_lock:
+        start, count = _rate_hits.get(token, (now, 0))
+        if now - start >= _RATE_WINDOW:
+            start, count = now, 0
+        count += 1
+        _rate_hits[token] = (start, count)
+        return count > _RATE_LIMIT
 
 
 def _dir_size_mb(path: str | None) -> float:
@@ -92,6 +128,8 @@ def _openai_error_type(status_code: int) -> str:
         return "authentication_error"
     if status_code == 403:
         return "permission_error"
+    if status_code == 429:
+        return "rate_limit_error"
     if status_code >= 500:
         return "server_error"
     return "invalid_request_error"
@@ -106,6 +144,7 @@ def _openai_error_code(status_code: int) -> str:
         409: "model_not_ready",
         413: "file_too_large",
         422: "validation_error",
+        429: "rate_limit_exceeded",
         500: "server_error",
         503: "api_disabled",
     }.get(status_code, "error")
@@ -124,6 +163,20 @@ def _as_openai_exception(exc: HTTPException) -> OpenAIHTTPException:
 def _require_token_openai(authorization: str | None = Header(default=None)) -> None:
     try:
         _require_token(authorization)
+    except HTTPException as exc:
+        raise _as_openai_exception(exc)
+
+
+def _rate_limit(authorization: str | None = Header(default=None)) -> None:
+    if _rate_exceeded(_token_from_header(authorization)):
+        raise HTTPException(
+            429, f"Demasiadas solicitudes (max {_RATE_LIMIT} por {_RATE_WINDOW}s)."
+        )
+
+
+def _rate_limit_openai(authorization: str | None = Header(default=None)) -> None:
+    try:
+        _rate_limit(authorization)
     except HTTPException as exc:
         raise _as_openai_exception(exc)
 
@@ -234,6 +287,7 @@ class TTSRequest(BaseModel):
     lang: str | None = None
     speed: float | None = None
     steps: int | None = None
+    response_format: str | None = None   # "wav" (default) | "mp3"
 
 
 class OpenAISpeechRequest(BaseModel):
@@ -315,7 +369,7 @@ def list_models():
             for n, b in BACKENDS.items()]
 
 
-@app.post("/api/tts", dependencies=[Depends(_require_token)])
+@app.post("/api/tts", dependencies=[Depends(_require_token), Depends(_rate_limit)])
 def tts(req: TTSRequest):
     started_at = time.perf_counter()
     slot_meta = None
@@ -328,6 +382,7 @@ def tts(req: TTSRequest):
         "lang": req.lang,
         "text_chars": len(req.text or ""),
         "output_bytes": 0,
+        "format": (req.response_format or "wav").lower(),
     }
     try:
         backend = BACKENDS.get(req.model)
@@ -355,8 +410,13 @@ def tts(req: TTSRequest):
         with inference.slot() as slot_meta:
             path = backend.synthesize(req.text, **opts)
         data = _read_wav_and_cleanup(path)
+        # wav por defecto (retrocompatible); mp3 solo si se pide explícitamente.
+        if call["format"] == "mp3":
+            data, media = _to_mp3(data), "audio/mpeg"
+        else:
+            media = "audio/wav"
         call["output_bytes"] = len(data)
-        return Response(content=data, media_type="audio/wav")
+        return Response(content=data, media_type=media)
     except HTTPException as e:
         error = e
         raise
@@ -380,7 +440,23 @@ def _read_wav_and_cleanup(path) -> bytes:
     return data
 
 
-@app.post("/api/clone", dependencies=[Depends(_require_token)])
+def _to_mp3(wav_bytes: bytes) -> bytes:
+    """Convierte WAV a MP3 vía ffmpeg (presente en la imagen). El WAV es corto
+    (tope de caracteres de TTS), así que la conversión es rápida."""
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-i", "pipe:0", "-f", "mp3", "pipe:1"],
+            input=wav_bytes, capture_output=True, timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        raise HTTPException(500, f"No se pudo convertir el audio a mp3: {e}")
+    if proc.returncode != 0 or not proc.stdout:
+        raise HTTPException(500, "No se pudo convertir el audio a mp3.")
+    return proc.stdout
+
+
+@app.post("/api/clone", dependencies=[Depends(_require_token), Depends(_rate_limit)])
 def clone(model: str = Form(...), text: str = Form(...),
           ref_audio: UploadFile = File(...), ref_text: str = Form(None)):
     """Clona voz desde un audio de referencia. El audio se procesa y se borra."""
@@ -507,14 +583,14 @@ def _transcribe_upload(audio: UploadFile, language: str | None, model: str,
         _record_call(call, started_at, slot_meta, error)
 
 
-@app.post("/api/transcribe", dependencies=[Depends(_require_token)])
+@app.post("/api/transcribe", dependencies=[Depends(_require_token), Depends(_rate_limit)])
 def transcribe(audio: UploadFile = File(...), language: str = Form(None),
                model: str = Form("Whisper")):
     """Transcribe audio with the native Modelbox API response shape."""
     return _transcribe_upload(audio=audio, language=language, model=model, include_duration=False)
 
 
-@app.post("/api/embeddings", dependencies=[Depends(_require_token)])
+@app.post("/api/embeddings", dependencies=[Depends(_require_token), Depends(_rate_limit)])
 def embeddings(req: EmbeddingsRequest):
     """Genera embeddings (texto -> vectores) para retrieval/RAG. No guarda nada."""
     started_at = time.perf_counter()
@@ -593,19 +669,21 @@ def v1_models():
         raise OpenAIHTTPException(500, str(exc), "server_error", "server_error")
 
 
-@app.post("/v1/audio/speech", dependencies=[Depends(_require_token_openai)])
+@app.post("/v1/audio/speech", dependencies=[Depends(_require_token_openai), Depends(_rate_limit_openai)])
 def v1_audio_speech(req: OpenAISpeechRequest):
-    """OpenAI-compatible TTS wrapper over /api/tts. Always returns audio/wav."""
+    """OpenAI-compatible TTS wrapper over /api/tts. Returns audio/wav (default) or
+    audio/mpeg when response_format is 'mp3'."""
     token = _surface_var.set("openai")
     try:
-        return tts(TTSRequest(model=req.model, text=req.input, voice=req.voice))
+        return tts(TTSRequest(model=req.model, text=req.input, voice=req.voice,
+                              response_format=req.response_format))
     except HTTPException as exc:
         raise _as_openai_exception(exc)
     finally:
         _surface_var.reset(token)
 
 
-@app.post("/v1/audio/transcriptions", dependencies=[Depends(_require_token_openai)])
+@app.post("/v1/audio/transcriptions", dependencies=[Depends(_require_token_openai), Depends(_rate_limit_openai)])
 def v1_audio_transcriptions(file: UploadFile = File(...), model: str = Form(...),
                             response_format: str = Form("json"),
                             language: str | None = Form(None)):
@@ -633,7 +711,7 @@ def v1_audio_transcriptions(file: UploadFile = File(...), model: str = Form(...)
         _surface_var.reset(token)
 
 
-@app.post("/v1/embeddings", dependencies=[Depends(_require_token_openai)])
+@app.post("/v1/embeddings", dependencies=[Depends(_require_token_openai), Depends(_rate_limit_openai)])
 def v1_embeddings(req: OpenAIEmbeddingsRequest):
     """OpenAI-compatible embeddings wrapper over /api/embeddings (task=document)."""
     if req.encoding_format not in (None, "float"):

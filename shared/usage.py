@@ -80,12 +80,6 @@ def _read_all(call_type: str | None = None) -> list[dict[str, Any]]:
     return rows
 
 
-def read_calls(limit: int = 100, call_type: str | None = None) -> list[dict[str, Any]]:
-    limit = max(1, min(int(limit or 100), 1000))
-    rows = _read_all(call_type=call_type)
-    return rows[-limit:][::-1]
-
-
 def summarize(calls: list[dict[str, Any]]) -> dict[str, Any]:
     by_type = Counter(str(c.get("type", "unknown")) for c in calls)
     total_chars = sum(int(c.get("text_chars") or 0) for c in calls)

@@ -19,19 +19,6 @@ _QUERY_PREFIX = "task: search result | query: "
 _DOCUMENT_PREFIX = "title: none | text: "
 
 
-def _dir_size_mb(path) -> float:
-    total = 0
-    if not path or not os.path.exists(path):
-        return 0.0
-    for root, _dirs, files in os.walk(path):
-        for f in files:
-            try:
-                total += os.path.getsize(os.path.join(root, f))
-            except OSError:
-                pass
-    return total / 1e6
-
-
 class GemmaEmbedder:
     name = "EmbeddingGemma"
     key = "embeddings"
@@ -47,8 +34,10 @@ class GemmaEmbedder:
     def is_downloaded(self) -> bool:
         if not state.is_downloaded(self.name):
             return False
-        # Un marker sin caché real de HF es obsoleto (descarga fallida/ruta vieja).
-        return _dir_size_mb(os.environ.get("HF_HOME")) > 10
+        # Un marker sin caché real de ESTE modelo es obsoleto (descarga fallida/ruta
+        # vieja). Se mide la carpeta del modelo, no todo HF_HOME (que otros modelos
+        # también llenan).
+        return state.hf_cache_size_mb(EMBED_MODEL_ID) > 10
 
     def _fetch(self, local_files_only: bool):
         """Descarga (o localiza en caché) el ONNX + tokenizer. Devuelve (ruta_onnx, tokenizer)."""
@@ -69,7 +58,7 @@ class GemmaEmbedder:
         import logging
         logging.getLogger(__name__).info("Descargando modelo: %s (%s)…", self.name, EMBED_MODEL_ID)
         self._fetch(local_files_only=False)
-        if _dir_size_mb(os.environ.get("HF_HOME")) <= 10:
+        if state.hf_cache_size_mb(EMBED_MODEL_ID) <= 10:
             state.unmark_downloaded(self.name)
             raise RuntimeError(f"{self.name} no dejó archivos de modelo en HF_HOME.")
         state.mark_downloaded(self.name)

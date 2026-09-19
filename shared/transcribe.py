@@ -10,19 +10,32 @@ from shared import state
 
 # Tamaño del modelo (configurable). small int8 ≈ 1 GB RAM, rápido en CPU.
 WHISPER_SIZE = os.environ.get("MODELBOX_WHISPER_SIZE", "small")
+_WHISPER_REPO = None
 
 
-def _dir_size_mb(path: str) -> float:
-    total = 0
-    if not path or not os.path.exists(path):
-        return 0.0
-    for root, _dirs, files in os.walk(path):
-        for f in files:
+def _whisper_repo() -> str:
+    """Repo del modelo en la caché de HF, para verificar la descarga por modelo.
+
+    Un valor con "/" se toma como repo id directo. Para un tamaño se usa el mapeo
+    oficial de faster-whisper (tamaño -> repo), porque no todos siguen la
+    convención ``Systran/faster-whisper-*`` (p. ej. "large" -> large-v3, "turbo"
+    y los "distil-*" viven en otros repos). Si el mapeo no está disponible, cae a
+    la convención Systran. Se resuelve de forma perezosa: no importa faster_whisper
+    en builds que no incluyen Whisper.
+    """
+    global _WHISPER_REPO
+    if _WHISPER_REPO is None:
+        if "/" in WHISPER_SIZE:
+            _WHISPER_REPO = WHISPER_SIZE
+        else:
+            repo = None
             try:
-                total += os.path.getsize(os.path.join(root, f))
-            except OSError:
-                pass
-    return total / 1e6
+                from faster_whisper.utils import _MODELS
+                repo = _MODELS.get(WHISPER_SIZE)
+            except Exception:
+                repo = None
+            _WHISPER_REPO = repo or f"Systran/faster-whisper-{WHISPER_SIZE}"
+    return _WHISPER_REPO
 
 
 class WhisperTranscriber:
@@ -36,10 +49,10 @@ class WhisperTranscriber:
     def is_downloaded(self) -> bool:
         if not state.is_downloaded(self.name):
             return False
-        # A marker without real HF cache is stale (e.g. old deployment marked it
-        # after a failed/wrong-path download). small int8 is hundreds of MB; 10 MB
-        # is a conservative floor to detect empty caches without hard-coding model files.
-        return _dir_size_mb(os.environ.get("HF_HOME")) > 10
+        # A marker without real cache for THIS model is stale (e.g. old deployment
+        # marked it after a failed/wrong-path download). Check the model's own cache
+        # folder, not all of HF_HOME (which other models also populate).
+        return state.hf_cache_size_mb(_whisper_repo()) > 10
 
     def download(self):
         """Descarga el modelo a la caché de HF y lo marca disponible."""
@@ -48,7 +61,7 @@ class WhisperTranscriber:
         from faster_whisper import WhisperModel
         download_root = os.environ.get("HF_HOME")
         WhisperModel(WHISPER_SIZE, device="cpu", compute_type="int8", download_root=download_root)
-        if _dir_size_mb(download_root) <= 10:
+        if state.hf_cache_size_mb(_whisper_repo()) <= 10:
             state.unmark_downloaded(self.name)
             raise RuntimeError(f"Whisper no dejo archivos de modelo en HF_HOME={download_root!r}.")
         state.mark_downloaded(self.name)

@@ -493,6 +493,11 @@ Consultar `/api/health`, campo `limits`. Defaults del servicio:
 - `MODELBOX_MAX_AUDIO_SECONDS=1200`
 - `MODELBOX_MAX_UPLOAD_MB=30`
 - `MODELBOX_MAX_EMBED_CHARS=8000` / `MODELBOX_MAX_EMBED_ITEMS=64`
+- `MODELBOX_RATE_LIMIT=0` (off) / `MODELBOX_RATE_WINDOW=60` — cupo por token en
+  endpoints de inferencia; al excederse devuelve `429` (solo si se activa)
+
+**Formato de audio (TTS):** por defecto `wav`. Enviar `response_format: "mp3"`
+en `/api/tts` o `/v1/audio/speech` para recibir `audio/mpeg`.
 
 **Embeddings — chunking obligatorio para textos largos:** cada texto se procesa
 hasta **~2048 tokens** (contexto de EmbeddingGemma). Texto más largo se trunca.
@@ -639,7 +644,7 @@ with gr.Blocks(title="Modelbox") as demo:
         with gr.Column(scale=2):
             gr.Markdown("### Recursos")
             mon_md = gr.Markdown(refresh_monitor())
-            timer = gr.Timer(1.5)
+            timer = gr.Timer(4.0)
 
     if MODEL_NAMES:
         tts_state_outputs = [voice_dd, lang_dd, speed_sl, steps_sl, ref_audio_in, ref_text_in,
